@@ -1,63 +1,27 @@
-# ACCESO AL REPOSITORIO — guía para continuar mañana
+# ACCESO AL REPOSITORIO
 
-Objetivo: poder trabajar y acceder al código desde cualquier sitio usando GitHub.
+## ✅ Estado actual (completado)
 
-## Estado actual (todo listo)
+- **Repo remoto**: <https://github.com/asmarin1996-ops/pxproxy> (**PRIVADO**, rama `main`)
+- Commit inicial `94b4e92` subido (40 ficheros); secretos excluidos por `.gitignore`
+- Autenticación configurada vía GitHub CLI (`gh`) en este equipo — push/pull sin contraseñas
 
-- ✅ Repositorio git inicializado en `C:\Proxy` (rama `main`) con **commit inicial hecho**
-- ✅ `.gitignore` protege los secretos: `config.json`, `secrets.key`, `limiters.json`, `audit.log*`, `backups/`, `certs/`, logs y binarios **nunca se subirán**
-- ✅ `config.example.json` incluido como plantilla pública de configuración
-- ✅ `README.md` renovado + `DOCUMENTO_TECNICO.md` v1.3 (toda la evidencia del proyecto)
-- ⏳ Único paso pendiente: que TÚ crees la cuenta y el repositorio remoto (ver abajo) — son ~5 minutos
+## Trabajar desde cualquier sitio
 
-> ⚠️ Por qué no hay credenciales escritas en este archivo: una contraseña dentro de un repo es el error nº1 de seguridad en GitHub (cualquier push accidental a público = fuga). Tus credenciales viven SOLO en tu gestor de contraseñas / GitHub.
+**En la web**: <https://github.com/asmarin1996-ops/pxproxy>
 
-## Paso 1 — Crear tu cuenta (2 min)
-
-1. Entra en <https://github.com/signup> con tu email personal o corporativo.
-2. Verifica el email, elige nombre de usuario (ej.: `tuusuario`).
-3. Activa 2FA cuando te lo pida (app autenticadora; guarda los códigos de recuperación).
-
-## Paso 2 — Crear el repositorio (1 min)
-
-1. En <https://github.com/new> crea un repo llamado `pxproxy`.
-2. **Elígelo PRIVADO** — importante: la documentación técnica incluye topología interna (IPs de laboratorio).
-3. NO inicialices con README ni .gitignore (ya los tenemos).
-
-## Paso 3 — Subir el código (elige UNA opción)
-
-### Opción A — GitHub CLI (recomendada, también sirve desde cualquier sitio después)
-
-```powershell
-winget install --id GitHub.cli
-gh auth login                  # elige "Login with a web browser"
-cd C:\Proxy
-gh repo create pxproxy --private --source=. --remote=origin --push
+**Clonar en otra máquina**:
+```bash
+git clone https://github.com/asmarin1996-ops/pxproxy.git
 ```
+Autenticación en esa máquina: instala GitHub CLI y ejecuta `gh auth login` (mismo flujo de código de dispositivo), o usa un token clásico con scope `repo` como contraseña.
 
-Con esto queda subido Y autenticado para futuros push/pull sin más pasos.
-
-### Opción B — Navegador + token (si no quieres instalar nada)
-
-1. Crea el repo vacío como en Paso 2.
-2. Genera un token: <https://github.com/settings/tokens/new> → marca solo `repo` → caducidad 30 días → copia el token (se ve UNA vez; guárdalo en tu gestor de contraseñas).
-3. Ejecuta:
-
+**Flujo diario local**:
 ```powershell
-cd C:\Proxy
-git remote add origin https://github.com/TUUSUARIO/pxproxy.git
-git push -u origin main        # usuario: TUUSUARIO · contraseña: el token (no tu password)
+git pull            # antes de empezar
+git add -A && git commit -m "cambio"
+git push
 ```
-
-## Acceder desde cualquier sitio
-
-- **Web**: <https://github.com/TUUSUARIO/pxproxy> (código, historial, issues)
-- **Clonar en otra máquina**:
-  ```bash
-  git clone https://github.com/TUUSUARIO/pxproxy.git
-  ```
-  (pedirá usuario + token; con la Opción A basta `gh auth login`)
-- Los secretos runtime (`config.json`, `secrets.key`…) no están en el repo: tras clonar en una máquina nueva, copia el `config.json` real del servidor o arranca desde cero (`config.example.json` es la plantilla).
 
 ## Reglas de oro del repo
 
