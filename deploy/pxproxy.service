@@ -1,0 +1,36 @@
+[Unit]
+Description=PxProxy - proxy inverso con autenticacion corporativa (AD/Entra ID)
+Documentation=https://localhost:8000/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pxproxy
+Group=pxproxy
+WorkingDirectory=/var/lib/pxproxy
+ExecStart=/usr/local/bin/pxproxy -config /etc/pxproxy/config.json
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+
+# Puertos privilegiados (80/443) sin correr como root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# Aislamiento
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pxproxy /etc/pxproxy
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

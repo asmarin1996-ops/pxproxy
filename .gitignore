@@ -1,0 +1,22 @@
+# Binarios y artefactos de compilacion
+*.exe
+*.exe~
+dist/
+
+# Secretos y estado en runtime (NUNCA versionar)
+config.json
+secrets.key
+limiters.json
+audit.log*
+backups/
+certs/
+acme-cache/
+
+# Logs y temporales
+*.log
+*.err
+*.tmp
+
+# Varios
+smoke.*
+.DS_Store

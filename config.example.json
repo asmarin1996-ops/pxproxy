@@ -1,0 +1,21 @@
+{
+  "admin_port": 8000,
+  "proxy_http_port": 80,
+  "proxy_https_port": 443,
+  "session_hours": 12,
+  "secure_cookies": false,
+  "insecure_upstream": false,
+  "admin_allowed_cidrs": [],
+  "panel_admins": [],
+  "login_max_fails": 5,
+  "lockout_minutes": 15,
+  "acme": { "enabled": false, "domains": [], "cache_dir": "acme-cache", "redirect_http": true },
+  "azure": { "tenant_id": "", "client_id": "", "client_secret": "", "redirect_url": "", "allowed_emails": [], "allowed_groups": [] },
+  "ldap": { "enabled": false, "url": "", "insecure_tls": false, "base_dn": "", "bind_upn_suffix": "", "user_filter": "(sAMAccountName=%s)", "allowed_emails": [], "allowed_groups": [] },
+  "local_admin": { "enabled": true, "username": "admin", "password_hash": "" },
+  "totp": { "enabled": true, "require_for": [], "secrets": {} },
+  "rules": [
+    { "host": "app.midominio.local", "target": "http://127.0.0.1:3000", "require_auth": false, "enabled": true }
+  ],
+  "storage": { "backend": "file", "dsn": "" }
+}
