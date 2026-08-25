@@ -307,6 +307,7 @@ label.check input { margin: 0; width: auto; }
 }
 .dash-full { grid-column: 1 / -1; }
 .dash-card canvas { width: 100% !important; }
+.chart-box { position: relative; height: 180px; }
 .dash-table {
   width: 100%;
   border-collapse: collapse;

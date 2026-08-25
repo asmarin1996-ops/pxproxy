@@ -687,6 +687,7 @@ function initDashCharts() {
   const commonOpts = {
     responsive: true,
     maintainAspectRatio: false,
+    resizeDelay: 250,
     animation: { duration: 300 },
     plugins: { legend: { display: false } },
     scales: {
