@@ -387,7 +387,9 @@ func main() {
 		if interval > 0 {
 			go func() {
 				time.Sleep(time.Minute)
-				autoBackupBD(logger, pgB, bdBackupDir, cfg.Storage.BackupKeep)
+				if pgstore.NewestBackupAge(bdBackupDir) > 30*time.Minute {
+					autoBackupBD(logger, pgB, bdBackupDir, cfg.Storage.BackupKeep)
+				}
 				t := time.NewTicker(interval)
 				defer t.Stop()
 				for range t.C {

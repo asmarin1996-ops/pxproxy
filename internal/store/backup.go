@@ -108,6 +108,14 @@ func PruneBackupFiles(dir string, keep int) {
 	}
 }
 
+func NewestBackupAge(dir string) time.Duration {
+	list := ListBackupFiles(dir)
+	if len(list) == 0 {
+		return time.Duration(1 << 62)
+	}
+	return time.Since(list[0].Modified)
+}
+
 func DeleteBackupFile(dir, name string) error {
 	clean := filepath.Base(name)
 	if clean == "." || clean == "/" || filepath.Ext(clean) != ".json" {
