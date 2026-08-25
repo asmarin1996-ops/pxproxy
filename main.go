@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 		"os"
 		"os/signal"
@@ -500,17 +501,40 @@ func main() {
 	}
 
 	pmux := http.NewServeMux()
-	pmux.HandleFunc("GET /auth/login", func(w http.ResponseWriter, r *http.Request) {
-		c := store.Get()
-		base := strings.TrimSuffix(c.Azure.RedirectURL, "/auth/callback")
-		if base == "" || !strings.HasPrefix(base, "http") {
-			base = fmt.Sprintf("http://localhost:%d", c.AdminPort)
+	panelProxy := httputil.NewSingleHostReverseProxy(&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("127.0.0.1:%d", cfg.AdminPort),
+	})
+	panelPublicHost := func() string {
+		pub := strings.TrimSpace(store.Get().PanelPublicURL)
+		if pub == "" {
+			return ""
 		}
+		if u, err := url.Parse(pub); err == nil {
+			return strings.ToLower(u.Host)
+		}
+		return ""
+	}
+	pmux.HandleFunc("GET /auth/login", func(w http.ResponseWriter, r *http.Request) {
 		rd := r.URL.Query().Get("rd")
 		if !strings.HasPrefix(rd, "/") || strings.HasPrefix(rd, "//") {
 			rd = "/"
 		}
 		ret := fmt.Sprintf("%s://%s%s", schemeOf(r), r.Host, rd)
+		if ph := panelPublicHost(); ph != "" {
+			if strings.EqualFold(rules.NormalizeHost(r.Host), ph) {
+				panelProxy.ServeHTTP(w, r)
+				return
+			}
+			pub := strings.TrimSuffix(strings.TrimSpace(store.Get().PanelPublicURL), "/")
+			http.Redirect(w, r, pub+"/auth/login?return="+url.QueryEscape(ret), http.StatusFound)
+			return
+		}
+		c := store.Get()
+		base := strings.TrimSuffix(c.Azure.RedirectURL, "/auth/callback")
+		if base == "" || !strings.HasPrefix(base, "http") {
+			base = fmt.Sprintf("http://localhost:%d", c.AdminPort)
+		}
 		http.Redirect(w, r, base+"/auth/login?return="+url.QueryEscape(ret), http.StatusFound)
 	})
 	pmux.HandleFunc("GET /auth/attach", authn.HandleAttach)

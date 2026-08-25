@@ -130,6 +130,7 @@ type Config struct {
 	SessionSecret     string           `json:"session_secret"`
 	SessionEpoch      int              `json:"session_epoch"`
 	SecureCookies     bool             `json:"secure_cookies"`
+	PanelPublicURL    string           `json:"panel_public_url"`
 	InsecureUpstream  bool             `json:"insecure_upstream"`
 	AdminAllowedCIDRs []string         `json:"admin_allowed_cidrs"`
 	PanelAdmins       []string         `json:"panel_admins"`

@@ -373,6 +373,12 @@ func (a *Authenticator) RedirectAfterAuth(u *UserClaims, returnURL string) strin
 	if err != nil {
 		return "/"
 	}
+	if target.Host == "" {
+		if strings.HasPrefix(returnURL, "/") && !strings.HasPrefix(returnURL, "//") {
+			return returnURL
+		}
+		return "/"
+	}
 	ticket, err := a.createTicket(u, target.Hostname())
 	if err != nil {
 		return "/"

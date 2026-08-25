@@ -526,6 +526,7 @@ func (a *Admin) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 			c.SessionHours = req.SessionHours
 		}
 		c.InsecureUpstream = req.InsecureUpstream
+		c.PanelPublicURL = strings.TrimSpace(req.PanelPublicURL)
 		c.Azure.TenantID = strings.TrimSpace(req.Azure.TenantID)
 		c.Azure.ClientID = strings.TrimSpace(req.Azure.ClientID)
 		c.Azure.ClientSecret = pickSecret(c.Azure.ClientSecret, req.Azure.ClientSecret)
