@@ -12,13 +12,29 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function toast(msg, isErr) {
+function toast(msg, kind, ms) {
   const t = document.getElementById('toast');
   t.textContent = msg;
-  t.classList.toggle('err', !!isErr);
+  t.classList.toggle('err', kind === true || kind === 'err');
+  t.classList.toggle('ok', kind === 'ok');
   t.classList.remove('hidden');
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.add('hidden'), 3500);
+  t._timer = setTimeout(() => t.classList.add('hidden'), ms || (kind === 'ok' ? 6000 : 3500));
+}
+
+function explicaErrorRenovacion(domain, raw) {
+  const e = String(raw || '').toLowerCase();
+  if (/ratelimit|429/.test(e))
+    return 'Let\'s Encrypt bloqueo temporalmente ' + domain + ': demasiados intentos fallidos en la ultima hora (limite por dominio). Espera el tiempo indicado en el detalle y vuelve a intentar.';
+  if (/no viable challenge|no autorizado/.test(e))
+    return 'Let\'s Encrypt no pudo validar ' + domain + '. Causas tipicas: el registro DNS publico del dominio no apunta aun a la IP de este proxy (propagacion DNS) o el puerto 80/443 no es alcanzable desde internet (revisa el DST-NAT del MikroTik). Detalle: ' + raw;
+  if (/timeout emitiendo|timeout/.test(e))
+    return 'La emision del certificado de ' + domain + ' tardo demasiado y se agoto la espera. La emision puede continuar en segundo plano: pulsa Verificar en unos segundos para comprobar si ya esta listo.';
+  if (/sin conexion tls local|apreton de manos|handshake/.test(e))
+    return 'El proxy no pudo completar el TLS local para ' + domain + ' durante la verificacion. Revisa que el listener HTTPS este activo. Detalle: ' + raw;
+  if (/dns/.test(e))
+    return 'Problema de DNS al validar ' + domain + ': verifica que el registro A publico apunte a la IP de este proxy y espera la propagacion. Detalle: ' + raw;
+  return 'No se pudo renovar el certificado de ' + domain + '. Detalle tecnico: ' + raw;
 }
 
 function esc(s) {
@@ -602,8 +618,37 @@ document.getElementById('certs-tbody').addEventListener('click', async e => {
     }
     if (e.target.classList.contains('cert-renew')) {
       if (!confirm('Forzar renovacion ACME de ' + domain + '?')) return;
-      await api('/api/certs/renew', { method: 'POST', body: JSON.stringify({ domain }) });
-      toast('Renovacion programada para ' + domain);
+      const btn = e.target;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Renovando...';
+      try {
+        await api('/api/certs/renew', { method: 'POST', body: JSON.stringify({ domain }) });
+        let live = null;
+        const t0 = Date.now();
+        while (Date.now() - t0 < 45000) {
+          await new Promise(r => setTimeout(r, 3000));
+          try {
+            const st = await api('/api/certs/status');
+            const row = (st.domains || []).find(x => x.domain === domain);
+            if (row && row.live) {
+              renderCertsStatus([row]);
+              live = row.live;
+              if (row.live.ok) break;
+              if (/rateLimited|no autorizado|no viable/i.test(row.live.error || '')) break;
+            }
+          } catch (pe) { /* sigue intentando */ }
+        }
+        if (live && live.ok) {
+          toast('Certificado de ' + domain + ' renovado correctamente — emitido por ' + (cnOf(live.issuer) || 'Let\'s Encrypt') + ', vigente hasta ' + fmtDate(live.not_after), 'ok', 8000);
+          await loadCerts();
+        } else {
+          toast(explicaErrorRenovacion(domain, (live && live.error) || 'sin respuesta del emisor tras 45 segundos'), true, 12000);
+        }
+      } catch (err) {
+        toast(explicaErrorRenovacion(domain, err.message), true, 12000);
+      } finally {
+        btn.disabled = false; btn.textContent = orig;
+      }
     }
     if (e.target.classList.contains('cert-del')) {
       if (!confirm('Eliminar el certificado propio de ' + domain + '? El dominio volvera a usar ACME o quedara sin TLS.')) return;

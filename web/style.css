@@ -285,6 +285,8 @@ label.check input { margin: 0; width: auto; }
   z-index: 50;
 }
 .toast.err { border-color: var(--red); }
+.toast.ok { border-color: var(--green); }
+.toast.ok::before { content: '\2714  '; color: var(--green); font-weight: 600; }
 
 .dash-grid {
   display: grid;
