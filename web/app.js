@@ -728,6 +728,8 @@ function parsePrometheusMetrics(text) {
 }
 
 async function refreshDashboard() {
+  if (dashBusy) return;
+  dashBusy = true;
   try {
     const text = await api('/metrics', { raw: true });
     if (!text) return;
@@ -822,10 +824,12 @@ async function refreshDashboard() {
     } catch {}
 
   } catch {}
+  dashBusy = false;
 }
-
 let dashInterval = null;
+let dashBusy = false;
 function startDashboard() {
+  stopDashboard();
   initDashCharts();
   refreshDashboard();
   dashInterval = setInterval(refreshDashboard, 3000);
