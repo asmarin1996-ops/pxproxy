@@ -153,8 +153,7 @@ async function doBackup() {
 }
 
 async function restoreBackup(file) {
-  if (!confirm('Restaurar la copia de seguridad?\nEsto reemplazara configuracion, bloqueos y auditoria actuales.\nTodos los nodos del cluster recargaran.'));
-    return;
+  if (!confirm('Restaurar la copia de seguridad?\nEsto reemplazara configuracion, bloqueos y auditoria actuales.\nTodos los nodos del cluster recargaran.')) return;
   const el = document.getElementById('bd-action');
   try {
     el.textContent = 'Restaurando...';
@@ -168,8 +167,7 @@ async function restoreBackup(file) {
 }
 
 async function deleteBackup(file) {
-  if (!confirm('Eliminar la copia de seguridad?\nEsta accion no se puede deshacer.'));
-    return;
+  if (!confirm('Eliminar la copia de seguridad?\nEsta accion no se puede deshacer.')) return;
   const el = document.getElementById('bd-action');
   try {
     el.textContent = 'Eliminando...';
