@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"sync"
@@ -49,7 +50,12 @@ func New(interval, timeout time.Duration, failures int, logger *log.Logger) *Che
 		timeout:  timeout,
 		failures: failures,
 		logger:   logger,
-		client:   &http.Client{Timeout: timeout},
+		client: &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+			},
+		},
 	}
 }
 

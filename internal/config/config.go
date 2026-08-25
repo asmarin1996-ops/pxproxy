@@ -89,6 +89,7 @@ type Rule struct {
 	Targets       []BackendTarget `json:"targets,omitempty"`
 	LoadBalancing string          `json:"load_balancing,omitempty"`
 	RequireAuth   bool            `json:"require_auth"`
+	InsecureTLS   bool            `json:"insecure_tls"`
 	Enabled       bool            `json:"enabled"`
 }
 

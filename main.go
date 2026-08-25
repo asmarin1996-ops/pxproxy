@@ -377,6 +377,7 @@ func main() {
 		name, ok, ver := store.BackendStatus()
 		return map[string]any{"storage": map[string]any{"backend": name, "ok": ok, "version": ver}}
 	})
+	engine.SetTLSLax(cfg.InsecureUpstream)
 	engine.Rebuild(cfg.Rules)
 
 	if pgB != nil {
@@ -457,6 +458,7 @@ func main() {
 			}
 			store.NoteBackendVersion(pgB.CurrentVersion())
 			c := store.Get()
+			engine.SetTLSLax(c.InsecureUpstream)
 			engine.Rebuild(c.Rules)
 			if aerr := authn.Reload(); aerr != nil {
 				logger.Printf("aviso: recarga de proveedores de identidad: %v", aerr)
@@ -662,10 +664,24 @@ func main() {
 				}
 				if acmeMgr != nil {
 					host := rules.NormalizeHost(hello.ServerName)
-					if host != "" && !acmeCertCached(host) {
-						return nil, fmt.Errorf("no hay cert ACME para %q (cache miss)", hello.ServerName)
+					if host != "" && !acmeCertCached(host) && !hostAllowedACME(host) {
+						return nil, fmt.Errorf("dominio %q sin certificado", hello.ServerName)
 					}
-					return acmeMgr.GetCertificate(hello)
+					type certRes struct {
+						c   *tls.Certificate
+						err error
+					}
+					ch := make(chan certRes, 1)
+					go func(h *tls.ClientHelloInfo) {
+						c, err := acmeMgr.GetCertificate(h)
+						ch <- certRes{c, err}
+					}(hello)
+					select {
+					case cr := <-ch:
+						return cr.c, cr.err
+					case <-time.After(30 * time.Second):
+						return nil, fmt.Errorf("timeout emitiendo cert ACME para %q; reintenta en unos segundos", host)
+					}
 				}
 				return nil, fmt.Errorf("sin certificado para %q", hello.ServerName)
 			},

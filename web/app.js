@@ -101,6 +101,7 @@ function renderRules(rules) {
       <td><code style="font-size:11px">${targetDisplay}</code> ${lbTag}</td>
       <td>-</td>
       <td><input type="checkbox" class="tgl-auth" ${r.require_auth ? 'checked' : ''}></td>
+      <td><input type="checkbox" class="tgl-tls" ${r.insecure_tls ? 'checked' : ''}></td>
       <td><input type="checkbox" class="tgl-en" ${r.enabled ? 'checked' : ''}></td>
       <td><button class="btn danger small del-rule" type="button">Eliminar</button></td>
     </tr>`;
@@ -283,6 +284,7 @@ document.getElementById('form-add-rule').addEventListener('submit', async e => {
       host: f.host.value.trim(),
       target: f.target.value.trim(),
       require_auth: f.require_auth.checked,
+      insecure_tls: f.insecure_tls.checked,
       enabled: true,
     })});
     f.reset();
@@ -322,6 +324,7 @@ document.getElementById('rules-tbody').addEventListener('change', async e => {
   const rule = (await api('/api/rules')).rules.find(r => r.host === host);
   if (!rule) return;
   if (e.target.classList.contains('tgl-auth')) rule.require_auth = e.target.checked;
+  if (e.target.classList.contains('tgl-tls')) rule.insecure_tls = e.target.checked;
   if (e.target.classList.contains('tgl-en')) rule.enabled = e.target.checked;
   try {
     const res = await api('/api/rules', { method: 'POST', body: JSON.stringify(rule) });

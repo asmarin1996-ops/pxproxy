@@ -132,9 +132,9 @@
     <div class="card-head"><h2>Reglas de proxy</h2><span id="rules-count" class="pill">0 activas</span></div>
     <table>
       <thead>
-        <tr><th>Dominio</th><th>Destino</th><th>LB</th><th>AD</th><th>Activa</th><th></th></tr>
+        <tr><th>Dominio</th><th>Destino</th><th>LB</th><th>AD</th><th title="Ignora el certificado del destino (HTTPS autofirmado)">TLS laxo</th><th>Activa</th><th></th></tr>
       </thead>
-      <tbody id="rules-tbody"><tr><td colspan="6" class="muted">Cargando...</td></tr></tbody>
+      <tbody id="rules-tbody"><tr><td colspan="7" class="muted">Cargando...</td></tr></tbody>
     </table>
     <p class="muted small">La columna AD exige inicio de sesion valido para entrar al sitio proxificado. Desactiva "Activa" para servir la pagina de dominio no accesible.</p>
     <h3 class="small muted mt">Regla simple (1 destino)</h3>
@@ -142,6 +142,7 @@
       <input name="host" placeholder="app.midominio.local" required>
       <input name="target" placeholder="http://localhost:3000" required>
       <label class="check"><input type="checkbox" name="require_auth">AD</label>
+      <label class="check" title="El destino usa HTTPS con certificado autofirmado"><input type="checkbox" name="insecure_tls">TLS laxo</label>
       <button class="btn primary" type="submit">Anadir</button>
     </form>
     <h3 class="small muted mt">Load Balancing (multiples destinos)</h3>

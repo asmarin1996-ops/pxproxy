@@ -1,13 +1,16 @@
 package rules
 
 import (
+	"crypto/tls"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"proxy/internal/config"
 	"proxy/internal/health"
@@ -95,15 +98,36 @@ func (lb *loadBalancer) leastConns() *backend {
 }
 
 type Engine struct {
-	mu      sync.RWMutex
-	routes  map[string]*route
-	logger  *log.Logger
-	health  *health.Checker
-	targets []string
+	mu              sync.RWMutex
+	routes          map[string]*route
+	logger          *log.Logger
+	health          *health.Checker
+	targets         []string
+	insecureDefault bool
 }
 
 func New(logger *log.Logger) *Engine {
 	return &Engine{routes: make(map[string]*route), logger: logger}
+}
+
+func (e *Engine) SetTLSLax(lax bool) {
+	e.insecureDefault = lax
+}
+
+func transportFor(insecure bool) *http.Transport {
+	if insecure {
+		return &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+		}
+	}
+	return http.DefaultTransport.(*http.Transport).Clone()
 }
 
 func (e *Engine) SetHealthChecker(hc *health.Checker) {
@@ -172,7 +196,7 @@ func (e *Engine) buildSingleBackend(rl config.Rule, host string) ([]*backend, *l
 		e.logger.Printf("regla descartada (destino invalido): %s -> %q", host, rl.Target)
 		return nil, nil
 	}
-	b := e.newBackend(tgt, 1)
+	b := e.newBackend(tgt, 1, rl.InsecureTLS || e.insecureDefault)
 	return []*backend{b}, newLoadBalancer([]*backend{b}, "round-robin")
 }
 
@@ -192,7 +216,7 @@ func (e *Engine) buildMultiBackends(rl config.Rule, host string) ([]*backend, *l
 		if weight <= 0 {
 			weight = 1
 		}
-		backends = append(backends, e.newBackend(tgt, weight))
+		backends = append(backends, e.newBackend(tgt, weight, rl.InsecureTLS || e.insecureDefault))
 	}
 	if len(backends) == 0 {
 		return nil, nil
@@ -200,7 +224,7 @@ func (e *Engine) buildMultiBackends(rl config.Rule, host string) ([]*backend, *l
 	return backends, newLoadBalancer(backends, strategy)
 }
 
-func (e *Engine) newBackend(tgt *url.URL, weight int) *backend {
+func (e *Engine) newBackend(tgt *url.URL, weight int, insecureTLS bool) *backend {
 	tgtCopy := *tgt
 	b := &backend{target: &tgtCopy, weight: weight}
 	b.rp = &httputil.ReverseProxy{
@@ -209,6 +233,7 @@ func (e *Engine) newBackend(tgt *url.URL, weight int) *backend {
 			pr.Out.Host = pr.In.Host
 			pr.SetXForwarded()
 		},
+		Transport: transportFor(insecureTLS),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			b.decConns()
 			e.logger.Printf("error %s -> %s: %v", r.Host, &tgtCopy, err)

@@ -402,7 +402,9 @@ func (a *Admin) handleRulesGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) rebuild() {
-	a.engine.Rebuild(a.store.Get().Rules)
+	cfg := a.store.Get()
+	a.engine.SetTLSLax(cfg.InsecureUpstream)
+	a.engine.Rebuild(cfg.Rules)
 }
 
 func (a *Admin) handleRulesPost(w http.ResponseWriter, r *http.Request) {
