@@ -38,7 +38,7 @@ function initTabs() {
   });
 }
 
-const KNOWN_VIEWS = ['estado', 'reglas', 'ajustes', 'identidad', 'seguridad', 'backups', 'twofa', 'certs'];
+const KNOWN_VIEWS = ['estado', 'dashboard', 'reglas', 'ajustes', 'identidad', 'seguridad', 'backups', 'twofa', 'certs'];
 
 function showView(name) {
   if (!KNOWN_VIEWS.includes(name)) name = 'estado';

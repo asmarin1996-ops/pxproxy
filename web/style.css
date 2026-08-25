@@ -87,19 +87,25 @@ body {
 }
 .nav a.active svg { opacity: 1; color: var(--accent); }
 
-.side-foot {
-  padding: 14px 16px;
-  border-top: 1px solid var(--border);
+/* Topbar: informacion de usuario arriba a la derecha */
+#app-area {
+  margin-left: 236px;
+}
+.topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-end;
+  padding: 10px 28px;
+  background: #0a0f1a;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 9;
 }
-.side-foot .who { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.side-foot .user { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.topbar-spacer { flex: 1; }
+.top-actions { display: flex; align-items: center; gap: 12px; }
 
 main#main {
-  margin-left: 236px;
   max-width: 1040px;
   padding: 26px 28px 60px;
 }
@@ -114,7 +120,9 @@ main#main {
   .nav { flex-direction: row; overflow-x: auto; padding: 8px; }
   .nav a { white-space: nowrap; border-left: none; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; }
   .nav a.active { border-bottom-color: var(--accent); }
-  main#main { margin-left: 0; padding: 18px 14px 50px; }
+  #app-area { margin-left: 0; }
+  .topbar { padding: 8px 14px; }
+  main#main { padding: 18px 14px 50px; }
 }
 
 .card {
