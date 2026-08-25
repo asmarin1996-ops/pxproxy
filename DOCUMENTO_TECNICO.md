@@ -2,7 +2,7 @@
 
 **Proxy inverso corporativo con autenticación Microsoft (Entra ID / Active Directory), 2FA opcional por usuario, gestión de certificados SSL y endurecimiento de seguridad perimetral.**
 
-Versión del documento: 1.3 — Agosto 2026 (cluster multi-nodo PostgreSQL: recarga caliente, bloqueos compartidos, auditoría replicada, degradación elegante; incluye despliegue Ubuntu y endurecimiento v2)
+Versión del documento: 1.4 — Agosto 2026 (backup/restore BD, cluster multi-nodo PostgreSQL: recarga caliente, bloqueos compartidos, auditoría replicada, degradación elegante; incluye despliegue Ubuntu y endurecimiento v2)
 Estado del proyecto: funcional y certificado mediante auditoría QA interna (ver sección 13).
 
 ---
@@ -231,6 +231,42 @@ Segundo nodo en el mismo host: copiar `/etc/pxproxy/{config.json,secrets.key}` a
 
 Bug corregido durante la certificación: deadlock en `SetBackend` (reentrancia de `saveMu` vía `persistLocal`) que solo se manifestaba adjuntando backend — añadida ruta `persistLocalLocked`.
 
+### 4.4 Backup y restore de la base de datos (v2.1)
+
+**Objetivo**: permitir al administrador respaldar el estado completo del cluster (configuración, bloqueos y auditoría) y restaurarlo a demanda, sin depender de herramientas externas como `pg_dump`.
+
+**Formato del backup**: fichero JSON versionado (`schema: 1`) con las tres tablas serializadas como arrays de filas, metadatos de creación y conteos. Los secretos aparecen **sellados** (prefijo `enc1:` o `dpapi1:`), lo que hace que los backups sean seguros para almacenamiento externo.
+
+```
+schema:        1
+source:        "postgres"
+created_at:    ISO-8601 UTC
+counts:        { pxproxy_config: N, pxproxy_locks: N, pxproxy_audit: N }
+tables:        [ { name, rows: [json.RawMessage...] }, ... ]
+```
+
+**Modos de operación**:
+
+| Modo | Descripción | Uso típico |
+|------|-------------|------------|
+| **API panel** | `POST /api/storage/backup` → crea fichero; `GET /api/storage/backups` → lista; `POST /api/storage/restore {file}` → restaura | Uso interactivo desde la UI |
+| **CLI one-shot** | `-backup-bd /ruta/f.json` conecta, descarga y sale; `-restore-bd /ruta/f.json` restaura y sale | Cron, scripts de mantenimiento |
+| **Automático programado** | `storage.backup_interval_minutes` (default 360) + `storage.backup_keep` (default 10); goroutine periódica con poda | Producción 24/7 |
+
+**Restore**: ejecuta TRUNCATE + reinsert en transacción con `pg_advisory_xact_lock`, garantizando atomicidad y exclusión de escritores concurrentes. Tras el commit exitoso, emite `pg_notify('pxproxy_changes')` para que todos los nodos recarguen la configuración restaurada ≤3 s. La versión de la BD (`updated_at`) cambia, visible en `/api/health`.
+
+**Degradación**: si el backup/restore se ejecuta con el backend en modo fichero (PG no disponible), el endpoint retorna error claro (`storage.backend=postgres requerido`).
+
+**Certificación E2E (25/08/2026, PostgreSQL 16.15 en `<IP-DEL-SERVIDOR>`)**
+
+| Prueba | Resultado |
+|---|---|
+| Crear regla test `baktest.local`, backup manual, eliminar regla, restore | Regla restaurada correctamente |
+| Restore: `{audit:17, config:1, locks:3}` — conteos correctos | OK |
+| Health post-restore con versión actualizada | `ok:true` |
+| Backups automáticos programados (360 min, conserva 10) | Log visible: `backups automaticos de BD cada 360 min` |
+| Scheduler de backups automáticos activo al inicio | OK (primer backup tras 1 min de margen) |
+
 ---
 
 ## 5. Referencia de `config.json`
@@ -255,6 +291,7 @@ Bug corregido durante la certificación: deadlock en `SetBackend` (reentrancia d
 | `local_admin` | objeto | `{enabled, username, password_hash(bcrypt)}` — hash vacío regenera `admin/Admin123!` |
 | `totp` | objeto | `{enabled, require_for[], secrets{identidad:{secret,confirmed}}}` |
 | `rules` | array | `{host, target, require_auth, enabled}` |
+| `storage` | objeto | `{backend, dsn, backup_interval_minutes(360), backup_keep(10)}` — cluster multi-nodo y backups de BD |
 
 Los secretos sensibles (`session_secret`, `azure.client_secret`, `totp.secrets.*.secret`) se cifran **en reposo**: en Windows con DPAPI (`dpapi1:`, ámbito CurrentUser) y en Linux con **AES-256-GCM usando la clave hermana `secrets.key`** (32 bytes aleatorios, creada con permisos 0600 junto a `config.json`; prefijo `enc1:`). `Open` entiende ambos formatos, lo que permite migrar un `config.json` entre plataformas regenerando solo los valores indescifrables. En memoria y en la API siempre viajan en claro/enmascarados. El archivo vive con permisos 0600.
 

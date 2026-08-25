@@ -200,6 +200,164 @@ func (b *PgBackend) AppendAudit(ctx context.Context, event, ip, user, detail str
 	return nil
 }
 
+const backupQueryTimeout = 120 * time.Second
+
+func (b *PgBackend) Backup(ctx context.Context) (*Snapshot, error) {
+	c, cancel := context.WithTimeout(ctx, backupQueryTimeout)
+	defer cancel()
+	snap := &Snapshot{
+		Schema:    BackupSchema,
+		CreatedAt: time.Now().UTC(),
+		Source:    "postgres",
+		Counts:    map[string]int{},
+	}
+	specs := []struct {
+		name string
+		sql  string
+	}{
+		{"pxproxy_config", `SELECT COALESCE(row_to_json(t)::text, 'null') FROM (SELECT * FROM pxproxy_config ORDER BY id) t`},
+		{"pxproxy_locks", `SELECT COALESCE(row_to_json(t)::text, 'null') FROM (SELECT * FROM pxproxy_locks ORDER BY name) t`},
+		{"pxproxy_audit", `SELECT COALESCE(row_to_json(t)::text, 'null') FROM (SELECT * FROM pxproxy_audit ORDER BY id) t`},
+	}
+	for _, sp := range specs {
+		rows, err := b.pool.Query(c, sp.sql)
+		if err != nil {
+			return nil, fmt.Errorf("%w (%s)", ErrBackendUnavailable, sp.name)
+		}
+		ts := TableSnapshot{Name: sp.name}
+		for rows.Next() {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			ts.Rows = append(ts.Rows, json.RawMessage(raw))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		snap.Counts[sp.name] = len(ts.Rows)
+		snap.Tables = append(snap.Tables, ts)
+	}
+	return snap, nil
+}
+
+func (b *PgBackend) Restore(ctx context.Context, snap *Snapshot) (map[string]int, error) {
+	c, cancel := context.WithTimeout(ctx, backupQueryTimeout)
+	defer cancel()
+	tx, err := b.pool.Begin(c)
+	if err != nil {
+		return nil, ErrBackendUnavailable
+	}
+	defer tx.Rollback(c)
+	if _, err := tx.Exec(c, `SELECT pg_advisory_xact_lock($1)`, lockIDConfig); err != nil {
+		return nil, ErrBackendUnavailable
+	}
+	done := map[string]int{}
+	for _, table := range []string{"pxproxy_locks", "pxproxy_audit", "pxproxy_config"} {
+		rows := snap.Table(table)
+		if _, err := tx.Exec(c, `TRUNCATE `+table+` RESTART IDENTITY CASCADE`); err != nil {
+			return nil, fmt.Errorf("vaciando %s: %w", table, err)
+		}
+		var rerr error
+		switch table {
+		case "pxproxy_locks":
+			rerr = b.restoreLockRow(c, tx, rows)
+		case "pxproxy_audit":
+			rerr = b.restoreAuditRow(c, tx, rows)
+		case "pxproxy_config":
+			rerr = b.restoreConfigRow(c, tx, rows)
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("restaurando %s: %w", table, rerr)
+		}
+		done[table] = len(rows)
+	}
+	if _, err := tx.Exec(c, `SELECT pg_notify($1, '')`, NotifyChannel); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(c); err != nil {
+		return nil, ErrBackendUnavailable
+	}
+	return done, nil
+}
+
+func decodeRow[T any](r json.RawMessage) (*T, error) {
+	var v T
+	if err := json.Unmarshal(r, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (b *PgBackend) restoreConfigRow(c context.Context, tx pgx.Tx, rows []json.RawMessage) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	type cfgRow struct {
+		ID   int             `json:"id"`
+		Data json.RawMessage `json:"data"`
+	}
+	r, err := decodeRow[cfgRow](rows[0])
+	if err != nil {
+		return err
+	}
+	data := r.Data
+	if len(data) == 0 || string(data) == "null" {
+		return ErrBadSnapshot
+	}
+	_, err = tx.Exec(c,
+		`INSERT INTO pxproxy_config (id, data, updated_at) VALUES ($1, $2, now())
+		 ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, r.ID, data)
+	return err
+}
+
+func (b *PgBackend) restoreLockRow(c context.Context, tx pgx.Tx, rows []json.RawMessage) error {
+	type lockRow struct {
+		Name  string          `json:"name"`
+		State json.RawMessage `json:"state"`
+	}
+	for _, raw := range rows {
+		r, err := decodeRow[lockRow](raw)
+		if err != nil || r.Name == "" || len(r.State) == 0 {
+			continue
+		}
+		if _, err := tx.Exec(c,
+			`INSERT INTO pxproxy_locks (name, state, updated_at) VALUES ($1, $2, now())
+			 ON CONFLICT (name) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`, r.Name, r.State); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *PgBackend) restoreAuditRow(c context.Context, tx pgx.Tx, rows []json.RawMessage) error {
+	type auditRow struct {
+		ID     int64     `json:"id"`
+		TS     time.Time `json:"ts"`
+		Event  string    `json:"event"`
+		IP     string    `json:"ip"`
+		User   *string   `json:"usr"`
+		Detail *string   `json:"detail"`
+	}
+	for _, raw := range rows {
+		r, err := decodeRow[auditRow](raw)
+		if err != nil || r.Event == "" {
+			continue
+		}
+		if _, err := tx.Exec(c,
+			`INSERT INTO pxproxy_audit (id, ts, event, ip, usr, detail) OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6)`,
+			r.ID, r.TS, r.Event, r.IP, r.User, r.Detail); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(c, `SELECT setval(pg_get_serial_sequence('pxproxy_audit', 'id'), $1)`, r.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *PgBackend) WatchChanges(ctx context.Context, onChange func(version string)) {
 	go func() {
 		for ctx.Err() == nil {

@@ -25,9 +25,16 @@ const DefaultAdminUsername = "admin"
 const DefaultAdminPassword = "Admin123!"
 
 type StorageConfig struct {
-	Backend string `json:"backend"`
-	DSN     string `json:"dsn"`
+	Backend               string `json:"backend"`
+	DSN                   string `json:"dsn"`
+	BackupIntervalMinutes int    `json:"backup_interval_minutes"`
+	BackupKeep            int    `json:"backup_keep"`
 }
+
+const (
+	DefaultBackupInterval = 360
+	DefaultBackupKeep     = 10
+)
 
 type LocalAdminConfig struct {
 	Enabled      bool   `json:"enabled"`
@@ -171,6 +178,15 @@ func normalize(c *Config) error {
 	}
 	if c.LocalAdmin.Username == "" {
 		c.LocalAdmin.Username = DefaultAdminUsername
+	}
+	if c.Storage.BackupIntervalMinutes == 0 {
+		c.Storage.BackupIntervalMinutes = DefaultBackupInterval
+	}
+	if c.Storage.BackupIntervalMinutes < 0 {
+		c.Storage.BackupIntervalMinutes = 0
+	}
+	if c.Storage.BackupKeep <= 0 {
+		c.Storage.BackupKeep = DefaultBackupKeep
 	}
 	return nil
 }

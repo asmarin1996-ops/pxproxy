@@ -12,9 +12,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
-	"runtime"
+		"os"
+		"os/signal"
+		"path/filepath"
+		"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -183,6 +184,25 @@ func attachPostgres(logger *log.Logger, st *config.Store, dsn string) (*pgstore.
 	return b, nil
 }
 
+func autoBackupBD(logger *log.Logger, pgB *pgstore.PgBackend, dir string, keep int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	data, err := pgB.SnapshotToJSON(ctx)
+	if err != nil {
+		logger.Printf("aviso: backup automatico de BD fallo: %v", err)
+		return
+	}
+	name, werr := pgstore.WriteBackupFile(dir, data)
+	if werr != nil {
+		logger.Printf("aviso: backup automatico de BD no se pudo escribir: %v", werr)
+		return
+	}
+	pgstore.PruneBackupFiles(dir, keep)
+	var snap pgstore.Snapshot
+	_ = json.Unmarshal(data, &snap)
+	logger.Printf("backup automatico de BD creado: %s %v", filepath.Base(name), snap.Counts)
+}
+
 var version = "dev"
 
 func main() {
@@ -190,6 +210,8 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "puerto del panel (sobrescribe la configuracion, no se persiste)")
 	httpPort := flag.Int("proxy-http-port", 0, "puerto HTTP del proxy (sobrescribe la configuracion, no se persiste)")
 	httpsPort := flag.Int("proxy-https-port", 0, "puerto HTTPS del proxy (sobrescribe la configuracion, no se persiste)")
+	backupBD := flag.String("backup-bd", "", "copia de seguridad de la BD hacia el fichero indicado y sale")
+	restoreBD := flag.String("restore-bd", "", "restaura la BD desde el fichero indicado y sale")
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "[pxproxy] ", log.LstdFlags)
@@ -222,6 +244,37 @@ func main() {
 		}
 	} else if strings.EqualFold(strings.TrimSpace(cfg.Storage.Backend), "postgres") {
 		logger.Printf("storage.backend=postgres pero storage.dsn esta vacio; se usa modo fichero")
+	}
+
+	if *backupBD != "" || *restoreBD != "" {
+		if pgB == nil {
+			logger.Fatal("las operaciones de backup/restore requieren storage.backend=postgres activo")
+		}
+		bctx, bcancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer bcancel()
+		if *backupBD != "" {
+			data, err := pgB.SnapshotToJSON(bctx)
+			if err != nil {
+				logger.Fatalf("backup de BD: %v", err)
+			}
+			if err := os.WriteFile(*backupBD, data, 0600); err != nil {
+				logger.Fatalf("escribiendo backup: %v", err)
+			}
+			var snap pgstore.Snapshot
+			_ = json.Unmarshal(data, &snap)
+			logger.Printf("BACKUP OK -> %s (%v)", *backupBD, snap.Counts)
+			return
+		}
+		data, err := os.ReadFile(*restoreBD)
+		if err != nil {
+			logger.Fatalf("leyendo backup: %v", err)
+		}
+		done, rerr := pgB.RestoreFromJSON(bctx, data)
+		if rerr != nil {
+			logger.Fatalf("restore de BD: %v", rerr)
+		}
+		logger.Printf("RESTORE OK desde %s: %v; los nodos recargaran la configuracion en segundos", *restoreBD, done)
+		return
 	}
 
 	engine := rules.New(logger)
@@ -304,6 +357,56 @@ func main() {
 	engine.Rebuild(cfg.Rules)
 
 	if pgB != nil {
+		bdBackupDir := filepath.Join(filepath.Dir(*cfgPath), "backups", "bd")
+		interval := time.Duration(cfg.Storage.BackupIntervalMinutes) * time.Minute
+		if interval > 0 {
+			go func() {
+				time.Sleep(time.Minute)
+				autoBackupBD(logger, pgB, bdBackupDir, cfg.Storage.BackupKeep)
+				t := time.NewTicker(interval)
+				defer t.Stop()
+				for range t.C {
+					autoBackupBD(logger, pgB, bdBackupDir, cfg.Storage.BackupKeep)
+				}
+			}()
+			logger.Printf("backups automaticos de BD cada %d min en %s (conserva %d)", cfg.Storage.BackupIntervalMinutes, bdBackupDir, cfg.Storage.BackupKeep)
+		}
+		admin.SetStorageOps(
+			func() (any, error) {
+				bctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				defer cancel()
+				data, err := pgB.SnapshotToJSON(bctx)
+				if err != nil {
+					return nil, err
+				}
+				name, werr := pgstore.WriteBackupFile(bdBackupDir, data)
+				if werr != nil {
+					return nil, werr
+				}
+				pgstore.PruneBackupFiles(bdBackupDir, cfg.Storage.BackupKeep)
+				var snap pgstore.Snapshot
+				_ = json.Unmarshal(data, &snap)
+				return map[string]any{"file": filepath.Base(name), "counts": snap.Counts}, nil
+			},
+			func() []pgstore.BackupInfo { return pgstore.ListBackupFiles(bdBackupDir) },
+			func(file string) (map[string]int, error) {
+				clean := filepath.Base(strings.TrimSpace(file))
+				if clean == "." || clean == "/" || filepath.Ext(clean) != ".json" {
+					return nil, fmt.Errorf("fichero de backup no valido")
+				}
+				data, rerr := os.ReadFile(filepath.Join(bdBackupDir, clean))
+				if rerr != nil {
+					return nil, rerr
+				}
+				rctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				defer cancel()
+				done, err := pgB.RestoreFromJSON(rctx, data)
+				if err == nil {
+					audit.Log("bd_restaurada", "", "", clean)
+				}
+				return done, err
+			},
+		)
 		watchCtx, watchCancel := context.WithCancel(context.Background())
 		defer watchCancel()
 		reload := func() {

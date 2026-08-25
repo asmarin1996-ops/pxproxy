@@ -35,7 +35,7 @@ function initTabs() {
   });
 }
 
-const KNOWN_VIEWS = ['estado', 'reglas', 'ajustes', 'identidad', 'seguridad', 'twofa', 'certs'];
+const KNOWN_VIEWS = ['estado', 'reglas', 'ajustes', 'identidad', 'seguridad', 'backups', 'twofa', 'certs'];
 
 function showView(name) {
   if (!KNOWN_VIEWS.includes(name)) name = 'estado';
@@ -111,6 +111,59 @@ async function loadSecurity() {
   f.login_max_fails.value = sec.login_max_fails;
   f.lockout_minutes.value = sec.lockout_minutes;
   f.secure_cookies.checked = !!cfg.secure_cookies;
+}
+
+async function loadBackups() {
+  try {
+    const data = await api('/api/storage/backups');
+    const list = data.backups || [];
+    const el = document.getElementById('bd-list');
+    if (!list.length) {
+      el.innerHTML = '<p class="muted small">No hay copias de seguridad aun</p>';
+      return;
+    }
+    el.innerHTML = list.map(b => {
+      const kb = Math.ceil(b.size_bytes / 1024);
+      const d = new Date(b.modified);
+      const fecha = d.toLocaleDateString('es-CL') + ' ' + d.toLocaleTimeString('es-CL', {hour:'2-digit', minute:'2-digit'});
+      return `<div class="backup-row" style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid #eee">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(b.file)}">${esc(b.file)}</span>
+        <span style="min-width:60px;text-align:right" class="muted small">${kb} KB</span>
+        <span style="min-width:90px;text-align:right" class="muted small">${fecha}</span>
+        <button class="btn small danger bd-restore" data-file="${esc(b.file)}" type="button">Restaurar</button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('bd-list').innerHTML = '<p class="muted small">BD no disponible para backups (requiere postgres)</p>';
+  }
+}
+
+async function doBackup() {
+  const el = document.getElementById('bd-action');
+  try {
+    el.textContent = 'Generando...';
+    await api('/api/storage/backup', { method: 'POST' });
+    el.textContent = 'Copia creada';
+    loadBackups();
+    setTimeout(() => el.textContent = '', 2000);
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function restoreBackup(file) {
+  if (!confirm('Restaurar la copia de seguridad?\nEsto reemplazara configuracion, bloqueos y auditoria actuales.\nTodos los nodos del cluster recargaran.'));
+    return;
+  const el = document.getElementById('bd-action');
+  try {
+    el.textContent = 'Restaurando...';
+    await api('/api/storage/restore', { method: 'POST', body: JSON.stringify({file}) });
+    el.textContent = 'Restaurado correctamente';
+    loadBackups();
+    setTimeout(() => el.textContent = '', 2000);
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+  }
 }
 
 async function loadRules() {
@@ -507,4 +560,11 @@ document.getElementById('certs-tbody').addEventListener('click', async e => {
   } catch (err) { toast(err.message, true); }
 });
 
-loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadTOTP(), loadCerts()])).catch(err => console.error(err));
+document.getElementById('btn-bd-backup').addEventListener('click', doBackup);
+
+document.getElementById('bd-list').addEventListener('click', e => {
+  const btn = e.target.closest('.bd-restore');
+  if (btn) restoreBackup(btn.dataset.file);
+});
+
+loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadBackups(), loadTOTP(), loadCerts()])).catch(err => console.error(err));

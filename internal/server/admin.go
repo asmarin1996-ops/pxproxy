@@ -20,6 +20,7 @@ import (
 	"proxy/internal/config"
 	"proxy/internal/rules"
 	"proxy/internal/security"
+	"proxy/internal/store"
 )
 
 const secretMask = "***SET***"
@@ -40,6 +41,14 @@ type Admin struct {
 	started time.Time
 
 	healthDetail func() map[string]any
+
+	bdBackup  func() (any, error)
+	bdList    func() []store.BackupInfo
+	bdRestore func(string) (map[string]int, error)
+}
+
+type storageReq struct {
+	File string `json:"file"`
 }
 
 func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, cm *certs.Manager, webFS fs.FS, logger *log.Logger, audit *security.AuditLog, limIP, limUser, limTOTP *security.Limiter) *Admin {
@@ -59,6 +68,12 @@ func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, c
 }
 
 func (a *Admin) SetHealthDetail(fn func() map[string]any) { a.healthDetail = fn }
+
+func (a *Admin) SetStorageOps(backup func() (any, error), list func() []store.BackupInfo, restore func(string) (map[string]int, error)) {
+	a.bdBackup = backup
+	a.bdList = list
+	a.bdRestore = restore
+}
 
 func (a *Admin) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -90,6 +105,45 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("POST /api/rules/delete", a.requireAPI(a.handleRulesDelete))
 	mux.HandleFunc("GET /api/config", a.requireAPI(a.handleConfigGet))
 	mux.HandleFunc("POST /api/config", a.requireAPI(a.handleConfigPost))
+	mux.HandleFunc("GET /api/storage/backups", a.requireAPI(func(w http.ResponseWriter, r *http.Request) {
+		if a.bdList == nil {
+			jsonErr(w, http.StatusBadRequest, "los backups de BD requieren storage.backend=postgres")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"backups": a.bdList()})
+	}))
+	mux.HandleFunc("POST /api/storage/backup", a.requireAPI(func(w http.ResponseWriter, r *http.Request) {
+		if a.bdBackup == nil {
+			jsonErr(w, http.StatusBadRequest, "los backups de BD requieren storage.backend=postgres")
+			return
+		}
+		res, err := a.bdBackup()
+		if err != nil {
+			a.audit.Log("bd_backup_error", security.ClientIP(r), "", err.Error())
+			jsonErr(w, http.StatusInternalServerError, "no se pudo crear el backup: "+err.Error())
+			return
+		}
+		a.audit.Log("bd_backup", security.ClientIP(r), "", "")
+		writeJSON(w, http.StatusOK, res)
+	}))
+	mux.HandleFunc("POST /api/storage/restore", a.requireAPI(func(w http.ResponseWriter, r *http.Request) {
+		if a.bdRestore == nil {
+			jsonErr(w, http.StatusBadRequest, "el restore requiere storage.backend=postgres")
+			return
+		}
+		var req storageReq
+		if err := decodeJSON(r, &req); err != nil {
+			writeDecodeErr(w, err)
+			return
+		}
+		done, err := a.bdRestore(req.File)
+		if err != nil {
+			a.audit.Log("bd_restore_error", security.ClientIP(r), "", err.Error())
+			jsonErr(w, http.StatusInternalServerError, "restore fallido: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": done})
+	}))
 	mux.HandleFunc("POST /api/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/ldap-test", a.requireAPI(a.handleLDAPTest))
 	mux.HandleFunc("POST /api/local-password", a.requireAPI(a.handleLocalPassword))
