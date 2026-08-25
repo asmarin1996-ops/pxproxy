@@ -1,5 +1,9 @@
 # PxProxy
 
+![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)
+![License](https://img.shields.io/badge/Licencia-MIT-green)
+![Platform](https://img.shields.io/badge/Plataforma-Linux%20%7C%20Windows-blue)
+
 Proxy inverso HTTP/HTTPS con autenticación corporativa (Entra ID / LDAP / admin local), panel de administración web, 2FA TOTP opcional por usuario, load balancing, health checks, dashboard en tiempo real, métricas Prometheus, gestión de certificados (ACME y propios) y **cluster multi-nodo con estado compartido en PostgreSQL**. Escrito en Go puro, sin dependencias de runtime.
 
 ## Características
@@ -64,3 +68,16 @@ Documentación técnica completa: [`DOCUMENTO_TECNICO.md`](DOCUMENTO_TECNICO.md)
 ## Seguridad
 
 Reporta vulnerabilidades por los canales privados acordados con el mantenedor; no abras issues públicas para ellas.
+
+## Licencia
+
+[MIT](LICENSE) — úsalo, modifícalo y distribúyelo libremente.
+
+## Apoya el proyecto
+
+Si PxProxy te resulta útil, considera apoyar su desarrollo:
+
+- **GitHub Sponsors**: [github.com/sponsors/asmarin1996-ops](https://github.com/sponsors/asmarin1996-ops)
+- **Ko-fi**: [ko-fi.com/asmarin1996](https://ko-fi.com/asmarin1996)
+
+Las donaciones ayudan a mantener el proyecto: nuevas funciones, correcciones de seguridad y mejor documentación. Gracias por tu apoyo.
