@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -1185,10 +1186,16 @@ func (a *Admin) handleCertsStatus(w http.ResponseWriter, r *http.Request) {
 		certs.Info
 		Live certs.LiveInfo `json:"live"`
 	}
-	rows := make([]row, 0, len(list))
-	for _, i := range list {
-		rows = append(rows, row{Info: i, Live: a.certs.Probe(i.Domain)})
+	rows := make([]row, len(list))
+	var wg sync.WaitGroup
+	for idx, i := range list {
+		wg.Add(1)
+		go func(idx int, i certs.Info) {
+			defer wg.Done()
+			rows[idx] = row{Info: i, Live: a.certs.Probe(i.Domain)}
+		}(idx, i)
 	}
+	wg.Wait()
 	writeJSON(w, http.StatusOK, map[string]any{"domains": rows})
 }
 
