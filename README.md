@@ -1,18 +1,25 @@
 # PxProxy
 
-Proxy inverso HTTP/HTTPS con autenticación corporativa (Entra ID / LDAP / admin local), panel de administración web, 2FA TOTP opcional por usuario, gestión de certificados (ACME y propios) y **cluster multi-nodo con estado compartido en PostgreSQL**. Escrito en Go puro, sin dependencias de runtime.
+Proxy inverso HTTP/HTTPS con autenticación corporativa (Entra ID / LDAP / admin local), panel de administración web, 2FA TOTP opcional por usuario, load balancing, health checks, dashboard en tiempo real, métricas Prometheus, gestión de certificados (ACME y propios) y **cluster multi-nodo con estado compartido en PostgreSQL**. Escrito en Go puro, sin dependencias de runtime.
 
 ## Características
 
 - **Proxy por dominio virtual**: cada `host` enruta a su upstream con cabeceras X-Forwarded-*; dominio deshabilitado → página endurecida 503.
+- **Load balancing**: round-robin, ponderado (weighted) y menos conexiones (least-connections) por dominio con múltiples backends.
+- **Health checks de upstreams**: probing HTTP periódico con circuit breaker (N fallos → DOWN, 1 OK → UP), métricas por backend.
+- **Dashboard en tiempo real**: gráficas de conexiones activas, RPS, latencia, memoria y estado de backends via Chart.js.
+- **Métricas Prometheus**: endpoint `/metrics` con 10 métricas (requests, duration, active conns, storage ok, upstream health, uptime, memory, goroutines).
+- **Logger estructurado JSON**: niveles debug/info/warn/error, componentes, request_id; compatible con `*log.Logger`.
 - **Autenticación**: Entra ID (OAuth2 + PKCE S256), LDAP/AD o admin local bcrypt. Bloqueos por IP/usuario con ventana deslizante y persistencia.
 - **2FA TOTP** obligatorio opcionalmente por identidad (`totp.require_for`).
-- **Certificados**: ACME (Let's Encrypt) con redirect HTTP→HTTPS o PEM propio por SNI; TLS del panel opcional.
-- **Panel web** embebido: reglas, ajustes, identidad, seguridad (bloqueos activos), 2FA y certificados. Rol `panel_admins` + escape hatch local.
+- **Certificados**: ACME (Let's Encrypt) con redirect HTTP→HTTPS o PEM propio por SNI; TLS del panel opcional (HTTP por defecto).
+- **Panel web** embebido: estado, dashboard, reglas, ajustes, identidad, seguridad, backups, 2FA, certificados. Rol `panel_admins` + escape hatch local.
 - **Cluster multi-nodo** (v2.0): configuración, bloqueos y auditoría compartidos en PostgreSQL; recarga en caliente LISTEN/NOTIFY; escritor único vía advisory locks; degradación elegante si la BD cae (el tráfico nunca se detiene).
+- **Backup/Restore BD**: snapshots JSON atómicos, auto-scheduler configurable, API + CLI + UI con crear/listar/restaurar/eliminar.
 - **Secretos cifrados en reposo**: DPAPI (Windows) o AES-256-GCM con `secrets.key` (Linux); formatos interoperables.
 - **Auditoría** JSONL rotada local + réplica a tabla SQL cuando hay cluster.
-- **Hardening**: CSP estricta, límites de cuerpo/cabeceras, verificación Origin, HSTS, backups previos a cada cambio con retención.
+- **CI/CD**: GitHub Actions con build linux+windows, vet, test -race, upload artifacts.
+- **Hardening**: CSP estricta, límites de cuerpo/cabeceras, verificación Origin, HSTS, backups previos a cada cambio con retención, systemd hardening completo.
 
 ## Inicio rápido (Ubuntu Server)
 

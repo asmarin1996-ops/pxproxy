@@ -1,8 +1,8 @@
 # PxProxy — Documento Técnico
 
-**Proxy inverso corporativo con autenticación Microsoft (Entra ID / Active Directory), 2FA opcional por usuario, gestión de certificados SSL y endurecimiento de seguridad perimetral.**
+**Proxy inverso corporativo con autenticación Microsoft (Entra ID / Active Directory), 2FA opcional por usuario, load balancing, health checks, dashboard en tiempo real, métricas Prometheus, gestión de certificados SSL y endurecimiento de seguridad perimetral.**
 
-Versión del documento: 1.4 — Agosto 2026 (backup/restore BD, cluster multi-nodo PostgreSQL: recarga caliente, bloqueos compartidos, auditoría replicada, degradación elegante; incluye despliegue Ubuntu y endurecimiento v2)
+Versión del documento: 1.5 — Agosto 2026 (v2.4.0: load balancing round-robin/weighted/least-connections, health checks upstreams con circuit breaker, dashboard grafico en tiempo real, métricas Prometheus, logger estructurado JSON, CI/CD GitHub Actions, backup/restore BD, cluster multi-nodo PostgreSQL)
 Estado del proyecto: funcional y certificado mediante auditoría QA interna (ver sección 13).
 
 ---
@@ -518,22 +518,141 @@ Regla creada → HostPolicy lo autoriza → primer handshake/sonda
 
 ## 15. Pruebas automatizadas (`go test ./...`)
 
-La matriz QA manual quedó congelada en suites Go ejecutables (7 paquetes, todos verdes):
+La matriz QA manual quedó congelada en suites Go ejecutables (9 paquetes, todos verdes):
 
 | Suite | Cobertura |
 |---|---|
 | `auth/totp_test.go` | Vectores oficiales RFC 6238 SHA1, rotación cada 30 s dentro/fuera de ventana, rechazo de formatos inválidos y secretos cortos, URI de provisión |
 | `auth/pkce_test.go` | Vector oficial RFC 7636 S256; `/auth/login` emite `code_challenge`+método y cookie de 3 partes cuyo verifier reproduce el challenge |
 | `server/password_test.go` | Política: fuertes aceptadas, débiles y patrones comunes rechazadas, **evasión leetspeak bloqueada** |
-| `rules/engine_test.go` | Normalización de host, precedencia exacta vs comodín, página endurecida 503 con CSP/cabeceras y sin reflexión de host, 404 sin regla |
+| `rules/engine_test.go` | Normalización de host, precedencia exacta vs comodín, página endurecida 503 con CSP/cabeceras y sin reflexión de host, 404 sin regla, load balancing round-robin/weighted/LC |
 | `config/config_test.go` | Tolerancia a BOM, regeneración de credenciales por defecto, **sellado DPAPI en disco con texto claro solo en memoria**, creación/poda de backups, round-trip de secretos entre recargas |
 | `secrets/secrets_windows_test.go` | Round-trip DPAPI, idempotencia del sellado, paso a través de texto plano |
 | `security/security_test.go` | Lockout/reset del limitador, **Snapshot→Restore preserva contadores**, rotación de auditoría con umbral pequeño y poda |
+| `health/health_test.go` | Probing HTTP con httptest, circuit breaker (N fallos → down, 1 OK → up), MarkAllHealthy, callback onChange, concurrencia |
+| `metrics/metrics_test.go` | RecordRequest concurrente, ActiveConns, Handler formato Prometheus, NormalizeRoute |
+| `logger/logger_test.go` | Formato JSON, niveles, request_id, WithComponent, ParseLevel |
 
 Hallazgos que estos tests destaparon durante su redacción (y quedaron corregidos): use-after-free al copiar el blob DPAPI antes de `LocalFree`; y tres aserciones mal planteadas del arnés inicial (vectores HOTP de 8 dígitos vs sufijo TOTP de 6, ventana no alineada a múltiplo de 30 s, URL de retorno relativa que la sanitización rechaza correctamente).
 
 ---
 
 ## 16. Créditos de dependencias
+
+---
+
+## 17. Load Balancing por dominio (v2.4.0)
+
+PxProxy soporta múltiples backends por dominio con tres estrategias de distribución:
+
+| Estrategia | Descripción |
+|---|---|
+| `round-robin` | Distribuye peticiones cíclicamente entre todos los backends |
+| `weighted` | Distribuye proporcionalmente al peso asignado a cada backend |
+| `least-connections` | Envía la petición al backend con menos conexiones activas |
+
+### Configuración vía API
+
+```json
+POST /api/rules
+{
+  "host": "api.midominio.local",
+  "targets": [
+    {"url": "http://backend1:3000", "weight": 1},
+    {"url": "http://backend2:3000", "weight": 2},
+    {"url": "http://backend3:3000", "weight": 1}
+  ],
+  "load_balancing": "weighted",
+  "require_auth": true,
+  "enabled": true
+}
+```
+
+### API de estado
+
+- `GET /api/load-balancing` — retorna lista de dominios con LB activo, estrategia, backends saludables y conexiones activas.
+- `GET /api/upstream-health` — estado detallado de cada target (saludable/down, fallos consecutivos, último check).
+
+---
+
+## 18. Health Checks de upstreams (v2.3.0)
+
+Cada backend registrado recibe probes HTTP periódicos. Si falla consecutivamente N veces (configurable), se marca como **DOWN** y las peticiones reciben `503 + Retry-After: 30`. Al recuperarse (1 éxito), vuelve a estado **OK**.
+
+### Parámetros de configuración (`health_check`)
+
+| Campo | Tipo | Default | Descripción |
+|---|---|---|---|
+| `enabled` | bool | true | Activa health checks |
+| `interval_sec` | int | 30 | Segundos entre probes |
+| `timeout_sec` | int | 5 | Timeout de cada probe HTTP |
+| `failures` | int | 3 | Fallos consecutivos antes de marcar DOWN |
+
+### Métricas Prometheus
+
+```
+pxproxy_upstream_health{target="http://backend1:3000"} 1
+pxproxy_upstream_health{target="http://backend2:3000"} 0
+```
+
+---
+
+## 19. Métricas Prometheus (v2.2.0)
+
+Endpoint `GET /metrics` (panel, sin autenticación). Formato text/plain conforme a Prometheus exposition format.
+
+| Métrica | Tipo | Descripción |
+|---|---|---|
+| `pxproxy_requests_total` | counter | Total de peticiones por ruta |
+| `pxproxy_request_duration_seconds` | gauge | Duración promedio por ruta |
+| `pxproxy_active_connections` | gauge | Conexiones activas en este momento |
+| `pxproxy_storage_ok` | gauge | Estado PostgreSQL (1=ok, 0=down) |
+| `pxproxy_storage_version_info` | gauge | Versión/timestamp de la BD |
+| `pxproxy_upstream_health` | gauge | Estado por upstream (1=saludable, 0=down) |
+| `pxproxy_uptime_seconds` | gauge | Tiempo de actividad |
+| `pxproxy_memory_alloc_bytes` | gauge | Memoria Go allocada |
+| `pxproxy_memory_sys_bytes` | gauge | Memoria del sistema Go |
+| `pxproxy_go_goroutines` | gauge | Goroutines activas |
+
+---
+
+## 20. Dashboard en tiempo real (v2.4.0)
+
+Panel web con vista **Dashboard** que muestra gráficas en vivo actualizadas cada 3 segundos:
+
+- **Conexiones activas** (gráfico de línea)
+- **Peticiones por segundo** (gráfico de línea, calculado incrementalmente)
+- **Latencia promedio** (gráfico de línea, en milisegundos)
+- **Memoria allocada** (gráfico de línea, en MB)
+- **Tabla de backends upstream** — estado, fallos, último check
+- **Tabla de load balancing** — dominio, estrategia, backends saludables, conexiones
+- **Estado de almacenamiento** — PostgreSQL OK/DOWN, uptime, goroutines
+
+Librería: Chart.js v4.4.7 (CDN).
+
+---
+
+## 21. Logger estructurado JSON (v2.2.0)
+
+Paquete `internal/logger`:
+
+- Salida JSON con campos: `time`, `level`, `msg`, `component`, `request_id`
+- Niveles: `debug`, `info`, `warn`, `error`
+- Compatible con `*log.Logger` estándar (métodos `Printf`, `Fatal`, `Write`)
+- Configurable por nivel con `SetLevel()`
+- Componente por paquete con `WithComponent()`
+
+---
+
+## 22. CI/CD GitHub Actions (v2.2.0)
+
+Workflow `.github/workflows/build.yml`:
+
+1. **Build** — `go build` para linux/amd64, linux/arm64, windows/amd64
+2. **Vet** — `go vet ./...`
+3. **Test** — `go test -race -count=1 ./...`
+4. **Artifacts** — Upload de binarios compilados
+
+Trigger: push a `main` o PR.
 
 `github.com/coreos/go-oidc/v3`, `golang.org/x/oauth2` (con PKCE), `github.com/go-ldap/ldap/v3`, `golang.org/x/crypto` v0.55.0 (bcrypt, acme/autocert), `golang.org/x/sys/windows` (DPAPI), `github.com/skip2/go-qrcode`. Resto: biblioteca estándar de Go.
