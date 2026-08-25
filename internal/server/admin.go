@@ -530,15 +530,19 @@ func (a *Admin) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 		c.Azure.AllowedEmails = cleanList(req.Azure.AllowedEmails)
 		c.Azure.AllowedGroups = cleanList(req.Azure.AllowedGroups)
 		c.LDAP.Enabled = req.LDAP.Enabled
-		c.LDAP.URL = strings.TrimSpace(req.LDAP.URL)
+		c.LDAP.URL = pickString(c.LDAP.URL, req.LDAP.URL)
 		c.LDAP.InsecureTLS = req.LDAP.InsecureTLS
-		c.LDAP.BaseDN = strings.TrimSpace(req.LDAP.BaseDN)
-		c.LDAP.BindUPNSuffix = strings.TrimSpace(req.LDAP.BindUPNSuffix)
+		c.LDAP.BaseDN = pickString(c.LDAP.BaseDN, req.LDAP.BaseDN)
+		c.LDAP.BindUPNSuffix = pickString(c.LDAP.BindUPNSuffix, req.LDAP.BindUPNSuffix)
 		if strings.TrimSpace(req.LDAP.UserFilter) != "" {
 			c.LDAP.UserFilter = strings.TrimSpace(req.LDAP.UserFilter)
 		}
-		c.LDAP.AllowedEmails = cleanList(req.LDAP.AllowedEmails)
-		c.LDAP.AllowedGroups = cleanList(req.LDAP.AllowedGroups)
+		if emails := cleanList(req.LDAP.AllowedEmails); len(emails) > 0 || req.LDAP.AllowedEmails != nil {
+			c.LDAP.AllowedEmails = emails
+		}
+		if groups := cleanList(req.LDAP.AllowedGroups); len(groups) > 0 || req.LDAP.AllowedGroups != nil {
+			c.LDAP.AllowedGroups = groups
+		}
 		c.LocalAdmin.Enabled = req.LocalAdmin.Enabled
 		if s := strings.TrimSpace(req.LocalAdmin.Username); s != "" {
 			c.LocalAdmin.Username = s
