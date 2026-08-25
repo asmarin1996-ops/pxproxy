@@ -160,9 +160,9 @@ func (c *Checker) checkOne(target string) {
 
 func (c *Checker) record(target string, ok bool, errMsg string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	s, exists := c.targets[target]
 	if !exists {
+		c.mu.Unlock()
 		return
 	}
 	prevHealthy, hadPrev := c.healthy[target]
@@ -184,8 +184,11 @@ func (c *Checker) record(target string, ok bool, errMsg string) {
 			}
 		}
 	}
-	if c.onChange != nil && (!hadPrev || prevHealthy != c.healthy[target]) {
-		c.onChange(target, c.healthy[target])
+	stateChanged := !hadPrev || prevHealthy != c.healthy[target]
+	nowHealthy := c.healthy[target]
+	c.mu.Unlock()
+	if c.onChange != nil && stateChanged {
+		c.onChange(target, nowHealthy)
 	}
 }
 

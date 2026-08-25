@@ -593,6 +593,13 @@ func main() {
 		}
 		return false
 	}
+	acmeCertCached := func(host string) bool {
+		if acmeCache == nil {
+			return false
+		}
+		_, err := acmeCache.Get(context.Background(), host)
+		return err == nil
+	}
 	if useACME {
 		acmeCache = autocert.DirCache(cfg.ACME.CacheDir)
 		acmeMgr = &autocert.Manager{
@@ -620,9 +627,12 @@ func main() {
 				return
 			}
 			host := rules.NormalizeHost(r.Host)
-			if store.Get().ACME.RedirectHTTP && (certMgr.HasCustom(host) || hostAllowedACME(host)) {
-				http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
-				return
+			if store.Get().ACME.RedirectHTTP {
+				hasCert := certMgr.HasCustom(host) || acmeCertCached(host)
+				if hasCert {
+					http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
+					return
+				}
 			}
 			proxyHandler.ServeHTTP(w, r)
 		})
@@ -651,6 +661,10 @@ func main() {
 					return c, nil
 				}
 				if acmeMgr != nil {
+					host := rules.NormalizeHost(hello.ServerName)
+					if host != "" && !acmeCertCached(host) {
+						return nil, fmt.Errorf("no hay cert ACME para %q (cache miss)", hello.ServerName)
+					}
 					return acmeMgr.GetCertificate(hello)
 				}
 				return nil, fmt.Errorf("sin certificado para %q", hello.ServerName)
