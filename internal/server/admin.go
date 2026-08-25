@@ -356,6 +356,14 @@ func pickSecret(current, incoming string) string {
 	return incoming
 }
 
+func pickString(current, incoming string) string {
+	incoming = strings.TrimSpace(incoming)
+	if incoming == "" {
+		return current
+	}
+	return incoming
+}
+
 type sessionResp struct {
 	Authenticated   bool             `json:"authenticated"`
 	User            *auth.UserClaims `json:"user,omitempty"`
@@ -490,10 +498,10 @@ func (a *Admin) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 		if req.ProxyHTTPSPort > 0 && req.ProxyHTTPSPort < 65536 {
 			c.ProxyHTTPSPort = req.ProxyHTTPSPort
 		}
-		c.TLSCertFile = strings.TrimSpace(req.TLSCertFile)
-		c.TLSKeyFile = strings.TrimSpace(req.TLSKeyFile)
-		c.PanelTLSCertFile = strings.TrimSpace(req.PanelTLSCertFile)
-		c.PanelTLSKeyFile = strings.TrimSpace(req.PanelTLSKeyFile)
+		c.TLSCertFile = pickString(c.TLSCertFile, req.TLSCertFile)
+		c.TLSKeyFile = pickString(c.TLSKeyFile, req.TLSKeyFile)
+		c.PanelTLSCertFile = pickString(c.PanelTLSCertFile, req.PanelTLSCertFile)
+		c.PanelTLSKeyFile = pickString(c.PanelTLSKeyFile, req.PanelTLSKeyFile)
 		if req.SessionHours >= 1 && req.SessionHours <= 720 {
 			c.SessionHours = req.SessionHours
 		}
@@ -521,8 +529,12 @@ func (a *Admin) handleConfigPost(w http.ResponseWriter, r *http.Request) {
 		c.LocalAdmin.PasswordHash = pickSecret(c.LocalAdmin.PasswordHash, req.LocalAdmin.PasswordHash)
 		c.SessionSecret = pickSecret(c.SessionSecret, req.SessionSecret)
 		c.SecureCookies = req.SecureCookies
-		c.AdminAllowedCIDRs = cleanList(req.AdminAllowedCIDRs)
-		c.PanelAdmins = cleanList(req.PanelAdmins)
+		if cidrs := cleanList(req.AdminAllowedCIDRs); len(cidrs) > 0 {
+			c.AdminAllowedCIDRs = cidrs
+		}
+		if pa := cleanList(req.PanelAdmins); len(pa) > 0 {
+			c.PanelAdmins = pa
+		}
 		if req.LoginMaxFails > 0 && req.LoginMaxFails <= 100 {
 			c.LoginMaxFails = req.LoginMaxFails
 		}
