@@ -277,3 +277,49 @@ label.check input { margin: 0; width: auto; }
   z-index: 50;
 }
 .toast.err { border-color: var(--red); }
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.dash-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.dash-card h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.dash-full { grid-column: 1 / -1; }
+.dash-card canvas { width: 100% !important; }
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.dash-table th, .dash-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.dash-table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.status-dot.ok { background: var(--green); }
+.status-dot.down { background: var(--red); }
+.status-dot.warn { background: var(--amber); }

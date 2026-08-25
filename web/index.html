@@ -16,6 +16,7 @@
 
   <nav class="nav" id="nav">
     <a href="#estado" data-view="estado" class="active"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>Estado</a>
+    <a href="#dashboard" data-view="dashboard"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Dashboard</a>
     <a href="#reglas" data-view="reglas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>Reglas de proxy</a>
     <a href="#ajustes" data-view="ajustes"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Ajustes</a>
     <a href="#identidad" data-view="identidad"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Identidad</a>
@@ -91,20 +92,73 @@
     <dl id="status-list" class="status"></dl>
   </section>
 
+  <section class="card view" data-view-name="dashboard">
+    <div class="card-head"><h2>Dashboard en tiempo real</h2><span id="dash-pill" class="pill">auto</span></div>
+    <div class="dash-grid">
+      <div class="dash-card">
+        <h3>Conexiones activas</h3>
+        <canvas id="chart-connections" height="180"></canvas>
+      </div>
+      <div class="dash-card">
+        <h3>Peticiones por segundo</h3>
+        <canvas id="chart-rps" height="180"></canvas>
+      </div>
+      <div class="dash-card">
+        <h3>Latencia promedio (ms)</h3>
+        <canvas id="chart-latency" height="180"></canvas>
+      </div>
+      <div class="dash-card">
+        <h3>Memoria (MB)</h3>
+        <canvas id="chart-memory" height="180"></canvas>
+      </div>
+      <div class="dash-card dash-full">
+        <h3>Estado de backends</h3>
+        <div id="upstream-table"></div>
+      </div>
+      <div class="dash-card">
+        <h3>Load Balancing</h3>
+        <div id="lb-table"></div>
+      </div>
+      <div class="dash-card">
+        <h3>Almacenamiento</h3>
+        <div id="storage-status"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="card view" data-view-name="reglas">
     <div class="card-head"><h2>Reglas de proxy</h2><span id="rules-count" class="pill">0 activas</span></div>
     <table>
       <thead>
-        <tr><th>Dominio</th><th>Destino</th><th>AD</th><th>Activa</th><th></th></tr>
+        <tr><th>Dominio</th><th>Destino</th><th>LB</th><th>AD</th><th>Activa</th><th></th></tr>
       </thead>
-      <tbody id="rules-tbody"><tr><td colspan="5" class="muted">Cargando...</td></tr></tbody>
+      <tbody id="rules-tbody"><tr><td colspan="6" class="muted">Cargando...</td></tr></tbody>
     </table>
-    <p class="muted small">La columna AD exige inicio de sesión valido para entrar al sitio proxificado. Desactiva "Activa" para servir la pagina de dominio no accesible.</p>
+    <p class="muted small">La columna AD exige inicio de sesion valido para entrar al sitio proxificado. Desactiva "Activa" para servir la pagina de dominio no accesible.</p>
+    <h3 class="small muted mt">Regla simple (1 destino)</h3>
     <form id="form-add-rule" class="row">
       <input name="host" placeholder="app.midominio.local" required>
       <input name="target" placeholder="http://localhost:3000" required>
       <label class="check"><input type="checkbox" name="require_auth">AD</label>
       <button class="btn primary" type="submit">Anadir</button>
+    </form>
+    <h3 class="small muted mt">Load Balancing (multiples destinos)</h3>
+    <form id="form-add-lb-rule" class="mt-8">
+      <div class="row2">
+        <label>Dominio<input name="host" placeholder="api.midominio.local" required></label>
+        <label>Estrategia
+          <select name="load_balancing">
+            <option value="round-robin">Round Robin</option>
+            <option value="weighted">Ponderado (Weighted)</option>
+            <option value="least-connections">Menos conexiones</option>
+          </select>
+        </label>
+      </div>
+      <label>Destinos (uno por linea, formato: URL,peso)
+        <textarea name="targets" rows="3" placeholder="http://backend1:3000,1&#10;http://backend2:3000,2&#10;http://backend3:3000,1"></textarea>
+      </label>
+      <label class="check"><input type="checkbox" name="require_auth">AD</label>
+      <button class="btn primary" type="submit">Crear regla LB</button>
     </form>
   </section>
 
@@ -231,6 +285,7 @@
   </section>
 </main>
 <div id="toast" class="toast hidden"></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

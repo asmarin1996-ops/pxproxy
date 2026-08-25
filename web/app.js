@@ -1,8 +1,11 @@
 let cfgData = null;
 
 async function api(path, opts = {}) {
+  const raw = opts.raw;
+  delete opts.raw;
   const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
   if (res.status === 401) { location.href = '/auth/login'; throw new Error('sesion expirada'); }
+  if (raw) { if (!res.ok) throw new Error('HTTP ' + res.status); return await res.text(); }
   let data = {};
   try { data = await res.json(); } catch (e) {}
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -81,17 +84,27 @@ function renderRules(rules) {
   const tbody = document.getElementById('rules-tbody');
   document.getElementById('rules-count').textContent = rules.length + ' regla(s)';
   if (!rules.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="muted">Sin reglas. Añade una abajo.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Sin reglas. Anade una abajo.</td></tr>';
     return;
   }
-  tbody.innerHTML = rules.map(r => `
+  tbody.innerHTML = rules.map(r => {
+    const hasLB = r.targets && r.targets.length > 0;
+    const targetDisplay = hasLB
+      ? r.targets.map(t => t.url).join('<br>')
+      : esc(r.target || '');
+    const lbTag = hasLB
+      ? `<span class="pill" style="font-size:10px">${r.load_balancing || 'round-robin'} (${r.targets.length})</span>`
+      : '';
+    return `
     <tr data-host="${esc(r.host)}">
       <td><code>${esc(r.host)}</code></td>
-      <td><code>${esc(r.target)}</code></td>
+      <td><code style="font-size:11px">${targetDisplay}</code> ${lbTag}</td>
+      <td>-</td>
       <td><input type="checkbox" class="tgl-auth" ${r.require_auth ? 'checked' : ''}></td>
       <td><input type="checkbox" class="tgl-en" ${r.enabled ? 'checked' : ''}></td>
       <td><button class="btn danger small del-rule" type="button">Eliminar</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 async function loadSecurity() {
@@ -274,6 +287,30 @@ document.getElementById('form-add-rule').addEventListener('submit', async e => {
     })});
     f.reset();
     toast('Regla guardada');
+    await loadRules();
+  } catch (err) { toast(err.message, true); }
+});
+
+document.getElementById('form-add-lb-rule').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const lines = f.targets.value.trim().split('\n').filter(l => l.trim());
+    const targets = lines.map(l => {
+      const parts = l.split(',');
+      return { url: parts[0].trim(), weight: parseInt(parts[1]) || 1 };
+    });
+    if (targets.length < 2) { toast('Se necesitan al menos 2 destinos para load balancing', true); return; }
+    await api('/api/rules', { method: 'POST', body: JSON.stringify({
+      host: f.host.value.trim(),
+      target: '',
+      targets: targets,
+      load_balancing: f.load_balancing.value,
+      require_auth: f.require_auth.checked,
+      enabled: true,
+    })});
+    f.reset();
+    toast('Regla LB guardada');
     await loadRules();
   } catch (err) { toast(err.message, true); }
 });
@@ -584,3 +621,173 @@ document.getElementById('bd-list').addEventListener('click', e => {
 });
 
 loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadBackups(), loadTOTP(), loadCerts()])).catch(err => console.error(err));
+
+/* ===== DASHBOARD ===== */
+const MAX_DASH_POINTS = 30;
+const dashHistory = { conns: [], rps: [], latency: [], memory: [], labels: [] };
+let prevMetrics = null;
+let dashCharts = {};
+
+function initDashCharts() {
+  if (typeof Chart === 'undefined') return;
+  const commonOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 300 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: { beginAtZero: true, grid: { color: '#21262d' }, ticks: { color: '#8b949e', font: { size: 10 } } }
+    }
+  };
+  const lineOpts = (color) => ({
+    ...commonOpts,
+    elements: { line: { borderColor: color, borderWidth: 2, fill: true, backgroundColor: color + '18' }, point: { radius: 0 } }
+  });
+  dashCharts.conns = new Chart(document.getElementById('chart-connections'), { type: 'line', data: { labels: [], datasets: [{ data: [], borderColor: '#4493f8', ...lineOpts('#4493f8') }] }, options: commonOpts });
+  dashCharts.rps = new Chart(document.getElementById('chart-rps'), { type: 'line', data: { labels: [], datasets: [{ data: [], borderColor: '#3fb950', ...lineOpts('#3fb950') }] }, options: commonOpts });
+  dashCharts.latency = new Chart(document.getElementById('chart-latency'), { type: 'line', data: { labels: [], datasets: [{ data: [], borderColor: '#d29922', ...lineOpts('#d29922') }] }, options: commonOpts });
+  dashCharts.memory = new Chart(document.getElementById('chart-memory'), { type: 'line', data: { labels: [], datasets: [{ data: [], borderColor: '#f778ba', ...lineOpts('#f778ba') }] }, options: commonOpts });
+}
+
+function pushDashPoint(key, val) {
+  dashHistory[key].push(val);
+  if (dashHistory[key].length > MAX_DASH_POINTS) dashHistory[key].shift();
+}
+
+function parsePrometheusMetrics(text) {
+  const m = {};
+  for (const line of text.split('\n')) {
+    if (line.startsWith('#') || line.trim() === '') continue;
+    const parts = line.split(' ');
+    if (parts.length < 2) continue;
+    const name = parts[0].split('{')[0];
+    const val = parseFloat(parts[1]);
+    if (!isNaN(val)) {
+      if (!m[name]) m[name] = [];
+      const labelMatch = parts[0].match(/\{(.+)\}/);
+      const labels = labelMatch ? labelMatch[1] : '';
+      m[name].push({ labels, value: val });
+    }
+  }
+  return m;
+}
+
+async function refreshDashboard() {
+  try {
+    const text = await api('/metrics', { raw: true });
+    if (!text) return;
+    const m = parsePrometheusMetrics(text);
+    const now = new Date().toLocaleTimeString('es');
+
+    dashHistory.labels.push(now);
+    if (dashHistory.labels.length > MAX_DASH_POINTS) dashHistory.labels.shift();
+
+    const conns = (m.pxproxy_active_connections || [{}])[0].value || 0;
+    const memBytes = (m.pxproxy_memory_alloc_bytes || [{}])[0].value || 0;
+    const memMB = Math.round(memBytes / 1024 / 1024);
+    const goroutines = (m.pxproxy_go_goroutines || [{}])[0].value || 0;
+
+    let totalRPS = 0;
+    if (prevMetrics && prevMetrics.pxproxy_requests_total) {
+      const prev = {};
+      prevMetrics.pxproxy_requests_total.forEach(r => { prev[r.labels] = r.value; });
+      (m.pxproxy_requests_total || []).forEach(r => {
+        const diff = r.value - (prev[r.labels] || 0);
+        if (diff > 0) totalRPS += diff;
+      });
+    }
+    prevMetrics = m;
+
+    let avgLatency = 0;
+    let latCount = 0;
+    (m.pxproxy_request_duration_seconds || []).forEach(r => { avgLatency += r.value; latCount++; });
+    avgLatency = latCount > 0 ? Math.round((avgLatency / latCount) * 1000) : 0;
+
+    pushDashPoint('conns', conns);
+    pushDashPoint('rps', totalRPS);
+    pushDashPoint('latency', avgLatency);
+    pushDashPoint('memory', memMB);
+
+    if (dashCharts.conns) {
+      ['conns', 'rps', 'latency', 'memory'].forEach(key => {
+        const chart = dashCharts[key];
+        if (!chart) return;
+        chart.data.labels = [...dashHistory.labels];
+        chart.data.datasets[0].data = [...dashHistory[key]];
+        chart.update('none');
+      });
+    }
+
+    const storageOK = (m.pxproxy_storage_ok || [{}])[0].value;
+    const uptime = Math.round((m.pxproxy_uptime_seconds || [{}])[0].value || 0);
+    const uptimeStr = Math.floor(uptime/3600) + 'h ' + Math.floor((uptime%3600)/60) + 'm';
+
+    document.getElementById('storage-status').innerHTML = `
+      <table class="dash-table">
+        <tr><th>Backend</th><td>${storageOK > 0 ? '<span class="status-dot ok"></span>PostgreSQL OK' : '<span class="status-dot down"></span>PostgreSQL DOWN'}</td></tr>
+        <tr><th>Upstreams</th><td>${(m.pxproxy_upstream_health || []).length}</td></tr>
+        <tr><th>Goroutines</th><td>${goroutines}</td></tr>
+        <tr><th>Uptime</th><td>${uptimeStr}</td></tr>
+      </table>`;
+
+    try {
+      const uh = await api('/api/upstream-health');
+      const upstreams = uh.upstreams || [];
+      if (upstreams.length === 0) {
+        document.getElementById('upstream-table').innerHTML = '<p class="muted small">No hay upstreams configurados</p>';
+      } else {
+        let html = '<table class="dash-table"><thead><tr><th>Target</th><th>Estado</th><th>Fallos</th><th>Ultimo check</th></tr></thead><tbody>';
+        upstreams.forEach(u => {
+          const dot = u.healthy ? 'ok' : 'down';
+          const lastCheck = u.last_check ? new Date(u.last_check).toLocaleTimeString('es') : '-';
+          html += `<tr><td style="word-break:break-all">${u.target}</td><td><span class="status-dot ${dot}"></span>${u.healthy ? 'Saludable' : 'DOWN'}</td><td>${u.consec_fails}</td><td>${lastCheck}</td></tr>`;
+        });
+        html += '</tbody></table>';
+        document.getElementById('upstream-table').innerHTML = html;
+      }
+    } catch {}
+
+    try {
+      const lb = await api('/api/load-balancing');
+      const items = lb.load_balancing || [];
+      if (items.length === 0) {
+        document.getElementById('lb-table').innerHTML = '<p class="muted small">Sin load balancing activo</p>';
+      } else {
+        let html = '<table class="dash-table"><thead><tr><th>Dominio</th><th>Estrategia</th><th>Backends</th><th>Saludables</th><th>Conns</th></tr></thead><tbody>';
+        items.forEach(i => {
+          html += `<tr><td>${i.host}</td><td>${i.strategy}</td><td>${i.backends}</td><td>${i.healthy}/${i.backends}</td><td>${i.total_conns}</td></tr>`;
+        });
+        html += '</tbody></table>';
+        document.getElementById('lb-table').innerHTML = html;
+      }
+    } catch {}
+
+  } catch {}
+}
+
+let dashInterval = null;
+function startDashboard() {
+  initDashCharts();
+  refreshDashboard();
+  dashInterval = setInterval(refreshDashboard, 3000);
+}
+function stopDashboard() {
+  if (dashInterval) { clearInterval(dashInterval); dashInterval = null; }
+}
+
+(function() {
+  const viewEls = document.querySelectorAll('[data-view-name]');
+  const nav = document.getElementById('nav');
+  if (nav) {
+    nav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-view]');
+      if (!link) return;
+      if (link.dataset.view === 'dashboard') {
+        setTimeout(startDashboard, 100);
+      } else {
+        stopDashboard();
+      }
+    });
+  }
+})();

@@ -78,11 +78,18 @@ type LDAPConfig struct {
 	AllowedGroups []string `json:"allowed_groups"`
 }
 
+type BackendTarget struct {
+	URL    string `json:"url"`
+	Weight int    `json:"weight"`
+}
+
 type Rule struct {
-	Host        string `json:"host"`
-	Target      string `json:"target"`
-	RequireAuth bool   `json:"require_auth"`
-	Enabled     bool   `json:"enabled"`
+	Host          string          `json:"host"`
+	Target        string          `json:"target"`
+	Targets       []BackendTarget `json:"targets,omitempty"`
+	LoadBalancing string          `json:"load_balancing,omitempty"`
+	RequireAuth   bool            `json:"require_auth"`
+	Enabled       bool            `json:"enabled"`
 }
 
 type TOTPSecret struct {

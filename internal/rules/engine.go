@@ -7,15 +7,91 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"proxy/internal/config"
 	"proxy/internal/health"
 )
 
+type backend struct {
+	target    *url.URL
+	rp        *httputil.ReverseProxy
+	weight    int
+	activeConns int64
+}
+
+func (b *backend) incConns()  { atomic.AddInt64(&b.activeConns, 1) }
+func (b *backend) decConns()  { atomic.AddInt64(&b.activeConns, -1) }
+func (b *backend) conns() int { return int(atomic.LoadInt64(&b.activeConns)) }
+
 type route struct {
 	rule     config.Rule
-	rp       *httputil.ReverseProxy
+	backends []*backend
+	lb       *loadBalancer
 	disabled bool
+}
+
+type loadBalancer struct {
+	backends []*backend
+	strategy string
+	rr       uint64
+}
+
+func newLoadBalancer(backends []*backend, strategy string) *loadBalancer {
+	return &loadBalancer{backends: backends, strategy: strategy}
+}
+
+func (lb *loadBalancer) next() *backend {
+	if len(lb.backends) == 0 {
+		return nil
+	}
+	switch lb.strategy {
+	case "weighted":
+		return lb.weighted()
+	case "least-connections":
+		return lb.leastConns()
+	default:
+		return lb.roundRobin()
+	}
+}
+
+func (lb *loadBalancer) roundRobin() *backend {
+	n := atomic.AddUint64(&lb.rr, 1)
+	idx := int(n-1) % len(lb.backends)
+	return lb.backends[idx]
+}
+
+func (lb *loadBalancer) weighted() *backend {
+	total := 0
+	for _, b := range lb.backends {
+		total += b.weight
+	}
+	if total == 0 {
+		return lb.backends[0]
+	}
+	n := atomic.AddUint64(&lb.rr, 1)
+	pos := int(n-1) % total
+	cumulative := 0
+	for _, b := range lb.backends {
+		cumulative += b.weight
+		if pos < cumulative {
+			return b
+		}
+	}
+	return lb.backends[0]
+}
+
+func (lb *loadBalancer) leastConns() *backend {
+	var best *backend
+	bestConns := -1
+	for _, b := range lb.backends {
+		c := b.conns()
+		if best == nil || c < bestConns {
+			best = b
+			bestConns = c
+		}
+	}
+	return best
 }
 
 type Engine struct {
@@ -42,6 +118,21 @@ func NormalizeHost(h string) string {
 	return h
 }
 
+func parseTarget(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, err
+	}
+	return u, nil
+}
+
 func (e *Engine) Rebuild(list []config.Rule) {
 	next := make(map[string]*route, len(list))
 	targets := make([]string, 0, len(list))
@@ -52,24 +143,9 @@ func (e *Engine) Rebuild(list []config.Rule) {
 		}
 		rt := &route{rule: rl, disabled: !rl.Enabled}
 		if !rt.disabled {
-			target, err := url.Parse(strings.TrimSpace(rl.Target))
-			if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
-				e.logger.Printf("regla descartada (destino invalido): %s -> %q", host, rl.Target)
-				continue
-			}
-			tgt := target
-			tgtStr := tgt.String()
-			targets = append(targets, tgtStr)
-			rt.rp = &httputil.ReverseProxy{
-				Rewrite: func(pr *httputil.ProxyRequest) {
-					pr.SetURL(tgt)
-					pr.Out.Host = pr.In.Host
-					pr.SetXForwarded()
-				},
-				ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-					e.logger.Printf("error %s -> %s: %v", r.Host, tgt, err)
-					http.Error(w, "502: el servicio de destino no responde", http.StatusBadGateway)
-				},
+			rt.backends, rt.lb = e.buildBackends(rl, host)
+			for _, b := range rt.backends {
+				targets = append(targets, b.target.String())
 			}
 		}
 		next[host] = rt
@@ -81,6 +157,69 @@ func (e *Engine) Rebuild(list []config.Rule) {
 	if e.health != nil {
 		e.health.SetTargets(targets)
 	}
+}
+
+func (e *Engine) buildBackends(rl config.Rule, host string) ([]*backend, *loadBalancer) {
+	if len(rl.Targets) > 0 {
+		return e.buildMultiBackends(rl, host)
+	}
+	return e.buildSingleBackend(rl, host)
+}
+
+func (e *Engine) buildSingleBackend(rl config.Rule, host string) ([]*backend, *loadBalancer) {
+	tgt, err := parseTarget(rl.Target)
+	if err != nil || tgt == nil {
+		e.logger.Printf("regla descartada (destino invalido): %s -> %q", host, rl.Target)
+		return nil, nil
+	}
+	b := e.newBackend(tgt, 1)
+	return []*backend{b}, newLoadBalancer([]*backend{b}, "round-robin")
+}
+
+func (e *Engine) buildMultiBackends(rl config.Rule, host string) ([]*backend, *loadBalancer) {
+	strategy := rl.LoadBalancing
+	if strategy == "" {
+		strategy = "round-robin"
+	}
+	var backends []*backend
+	for _, t := range rl.Targets {
+		tgt, err := parseTarget(t.URL)
+		if err != nil || tgt == nil {
+			e.logger.Printf("backend descartado (destino invalido): %s -> %q", host, t.URL)
+			continue
+		}
+		weight := t.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		backends = append(backends, e.newBackend(tgt, weight))
+	}
+	if len(backends) == 0 {
+		return nil, nil
+	}
+	return backends, newLoadBalancer(backends, strategy)
+}
+
+func (e *Engine) newBackend(tgt *url.URL, weight int) *backend {
+	tgtCopy := *tgt
+	b := &backend{target: &tgtCopy, weight: weight}
+	b.rp = &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(&tgtCopy)
+			pr.Out.Host = pr.In.Host
+			pr.SetXForwarded()
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			b.decConns()
+			e.logger.Printf("error %s -> %s: %v", r.Host, &tgtCopy, err)
+			http.Error(w, "502: el servicio de destino no responde", http.StatusBadGateway)
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			b.decConns()
+			return nil
+		},
+	}
+	return b
 }
 
 func (e *Engine) lookup(host string) *route {
@@ -156,8 +295,28 @@ func (e *Engine) Handler(authCheck func(*http.Request) bool, unauthorized http.H
 			writeBlockedPage(w)
 			return
 		}
-		if e.health != nil && !e.health.IsHealthy(rt.rule.Target) {
-			e.logger.Printf("upstream no saludable: %s (%s)", rt.rule.Host, rt.rule.Target)
+		if rt.lb != nil && len(rt.lb.backends) > 1 {
+			b := rt.lb.next()
+			if b == nil {
+				http.Error(w, "503: sin backends disponibles", http.StatusServiceUnavailable)
+				return
+			}
+			if e.health != nil && !e.health.IsHealthy(b.target.String()) {
+				e.logger.Printf("backend no saludable: %s -> %s", rt.rule.Host, b.target)
+				w.Header().Set("Retry-After", "30")
+				http.Error(w, "503: el servicio de destino no esta disponible temporalmente", http.StatusServiceUnavailable)
+				return
+			}
+			if rt.rule.RequireAuth && !authCheck(r) {
+				unauthorized(w, r)
+				return
+			}
+			b.incConns()
+			b.rp.ServeHTTP(w, r)
+			return
+		}
+		if e.health != nil && len(rt.backends) > 0 && !e.health.IsHealthy(rt.backends[0].target.String()) {
+			e.logger.Printf("upstream no saludable: %s (%s)", rt.rule.Host, rt.backends[0].target)
 			w.Header().Set("Retry-After", "30")
 			http.Error(w, "503: el servicio de destino no esta disponible temporalmente", http.StatusServiceUnavailable)
 			return
@@ -166,7 +325,10 @@ func (e *Engine) Handler(authCheck func(*http.Request) bool, unauthorized http.H
 			unauthorized(w, r)
 			return
 		}
-		rt.rp.ServeHTTP(w, r)
+		if len(rt.backends) > 0 {
+			rt.backends[0].incConns()
+			rt.backends[0].rp.ServeHTTP(w, r)
+		}
 	})
 }
 
@@ -181,4 +343,36 @@ func (e *Engine) TargetHealth() []health.Status {
 		return nil
 	}
 	return e.health.Snapshot()
+}
+
+type BackendLBInfo struct {
+	Host        string `json:"host"`
+	Strategy    string `json:"strategy"`
+	Backends    int    `json:"backends"`
+	Healthy     int    `json:"healthy"`
+	TotalConns  int    `json:"total_conns"`
+}
+
+func (e *Engine) LoadBalancingInfo() []BackendLBInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var out []BackendLBInfo
+	for host, rt := range e.routes {
+		if rt.lb == nil || len(rt.lb.backends) <= 1 {
+			continue
+		}
+		info := BackendLBInfo{
+			Host:     host,
+			Strategy: rt.lb.strategy,
+			Backends: len(rt.lb.backends),
+		}
+		for _, b := range rt.lb.backends {
+			info.TotalConns += b.conns()
+			if e.health == nil || e.health.IsHealthy(b.target.String()) {
+				info.Healthy++
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }

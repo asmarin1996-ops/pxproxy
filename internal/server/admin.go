@@ -107,6 +107,7 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("GET /metrics", a.metricsHandler)
 	mux.HandleFunc("GET /api/session", a.handleSession)
 	mux.HandleFunc("GET /api/upstream-health", a.requireAPI(a.handleUpstreamHealth))
+	mux.HandleFunc("GET /api/load-balancing", a.requireAPI(a.handleLoadBalancing))
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{"ok": true, "uptime_seconds": int(time.Since(a.started).Seconds())}
 		if a.healthDetail != nil {
@@ -414,12 +415,28 @@ func (a *Admin) handleRulesPost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "dominio invalido (ejemplo: app.midominio.local o *.midominio.local)")
 		return
 	}
-	tgt, err := url.Parse(strings.TrimSpace(rule.Target))
-	if err != nil || (tgt.Scheme != "http" && tgt.Scheme != "https") || tgt.Host == "" {
-		jsonErr(w, http.StatusBadRequest, "destino invalido, debe ser una URL http(s)")
-		return
+	if len(rule.Targets) > 0 {
+		validLB := map[string]bool{"round-robin": true, "weighted": true, "least-connections": true}
+		if rule.LoadBalancing != "" && !validLB[rule.LoadBalancing] {
+			jsonErr(w, http.StatusBadRequest, "load_balancing invalido: round-robin, weighted, least-connections")
+			return
+		}
+		for i, bt := range rule.Targets {
+			t, err := url.Parse(strings.TrimSpace(bt.URL))
+			if err != nil || (t.Scheme != "http" && t.Scheme != "https") || t.Host == "" {
+				jsonErr(w, http.StatusBadRequest, fmt.Sprintf("backend %d: destino invalido", i+1))
+				return
+			}
+			rule.Targets[i].URL = strings.TrimSpace(bt.URL)
+		}
+	} else {
+		tgt, err := url.Parse(strings.TrimSpace(rule.Target))
+		if err != nil || (tgt.Scheme != "http" && tgt.Scheme != "https") || tgt.Host == "" {
+			jsonErr(w, http.StatusBadRequest, "destino invalido, debe ser una URL http(s)")
+			return
+		}
 	}
-	err = a.store.Update(func(c *config.Config) {
+	err := a.store.Update(func(c *config.Config) {
 		found := false
 		for i := range c.Rules {
 			if rules.NormalizeHost(c.Rules[i].Host) == rule.Host {
@@ -641,6 +658,10 @@ func (a *Admin) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 func (a *Admin) handleUpstreamHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"upstreams": a.engine.TargetHealth()})
+}
+
+func (a *Admin) handleLoadBalancing(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"load_balancing": a.engine.LoadBalancingInfo()})
 }
 
 func (a *Admin) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
