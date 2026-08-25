@@ -104,6 +104,7 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("GET /{$}", a.requirePage(a.handleIndex))
 	mux.HandleFunc("GET /style.css", a.requirePage(a.serveAsset("style.css")))
 	mux.HandleFunc("GET /app.js", a.requirePage(a.serveAsset("app.js")))
+	mux.HandleFunc("GET /chart.umd.min.js", a.requirePage(a.serveAsset("chart.umd.min.js")))
 	mux.HandleFunc("GET /favicon.svg", a.serveAsset("favicon.svg"))
 	mux.HandleFunc("GET /metrics", a.metricsHandler)
 	mux.HandleFunc("GET /api/session", a.handleSession)

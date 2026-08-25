@@ -674,10 +674,16 @@ loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(),
 const MAX_DASH_POINTS = 30;
 const dashHistory = { conns: [], rps: [], latency: [], memory: [], labels: [] };
 let prevMetrics = null;
+let prevMetricsAt = null;
 let dashCharts = {};
 
 function initDashCharts() {
-  if (typeof Chart === 'undefined') return;
+  if (typeof Chart === 'undefined') {
+    document.querySelectorAll('.dash-card canvas').forEach(c => {
+      c.outerHTML = '<p class="muted small">No se pudo cargar la libreria de graficos (chart.umd.min.js)</p>';
+    });
+    return;
+  }
   const commonOpts = {
     responsive: true,
     maintainAspectRatio: false,
@@ -737,15 +743,19 @@ async function refreshDashboard() {
     const goroutines = (m.pxproxy_go_goroutines || [{}])[0].value || 0;
 
     let totalRPS = 0;
-    if (prevMetrics && prevMetrics.pxproxy_requests_total) {
+    const nowMs = Date.now();
+    if (prevMetrics && prevMetrics.pxproxy_requests_total && prevMetricsAt) {
+      const elapsed = Math.max(1, (nowMs - prevMetricsAt) / 1000);
       const prev = {};
       prevMetrics.pxproxy_requests_total.forEach(r => { prev[r.labels] = r.value; });
       (m.pxproxy_requests_total || []).forEach(r => {
         const diff = r.value - (prev[r.labels] || 0);
         if (diff > 0) totalRPS += diff;
       });
+      totalRPS = totalRPS / elapsed;
     }
     prevMetrics = m;
+    prevMetricsAt = nowMs;
 
     let avgLatency = 0;
     let latCount = 0;
