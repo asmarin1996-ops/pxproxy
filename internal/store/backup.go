@@ -63,7 +63,7 @@ func WriteBackupFile(dir string, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
-	name := filepath.Join(dir, fmt.Sprintf("pxproxy-bd-%s.json", time.Now().Format("20060102-150405")))
+	name := filepath.Join(dir, fmt.Sprintf("pxproxy-bd-%s.json", time.Now().Format("20060102-150405.000")))
 	tmp := name + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return "", err

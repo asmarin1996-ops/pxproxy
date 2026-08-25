@@ -25,6 +25,7 @@ import (
 	"proxy/internal/auth"
 	"proxy/internal/certs"
 	"proxy/internal/config"
+	"proxy/internal/metrics"
 	"proxy/internal/rules"
 	"proxy/internal/security"
 	"proxy/internal/server"
@@ -350,6 +351,7 @@ func main() {
 	defer close(saveStop)
 
 	admin := server.New(store, engine, authn, certMgr, sub, logger, audit, limIP, limUser, limTOTP)
+	admin.SetMetrics(metrics.Default)
 	admin.SetHealthDetail(func() map[string]any {
 		name, ok, ver := store.BackendStatus()
 		return map[string]any{"storage": map[string]any{"backend": name, "ok": ok, "version": ver}}
@@ -450,13 +452,17 @@ func main() {
 					ver, verr := pgB.Version(watchCtx)
 					if verr != nil {
 						store.MarkBackend(false)
+						metrics.Default.SetBackendOk(false)
 						continue
 					}
 					_, _, cur := store.BackendStatus()
 					if cur != ver {
 						reload()
+						metrics.Default.SetBackendVersion(ver)
 					} else {
 						store.MarkBackend(true)
+						metrics.Default.SetBackendOk(true)
+						metrics.Default.SetBackendVersion(ver)
 					}
 				case <-watchCtx.Done():
 					return
@@ -494,6 +500,7 @@ func main() {
 	proxyHandler := security.Chain(pmux,
 		security.Recover(logger),
 		security.SecureHeaders(false),
+		metrics.Middleware,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

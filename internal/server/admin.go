@@ -18,6 +18,7 @@ import (
 	"proxy/internal/auth"
 	"proxy/internal/certs"
 	"proxy/internal/config"
+	"proxy/internal/metrics"
 	"proxy/internal/rules"
 	"proxy/internal/security"
 	"proxy/internal/store"
@@ -41,6 +42,7 @@ type Admin struct {
 	started time.Time
 
 	healthDetail func() map[string]any
+	metrics      *metrics.Metrics
 
 	bdBackup  func() (any, error)
 	bdList    func() []store.BackupInfo
@@ -70,6 +72,16 @@ func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, c
 
 func (a *Admin) SetHealthDetail(fn func() map[string]any) { a.healthDetail = fn }
 
+func (a *Admin) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	if a.metrics == nil {
+		http.Error(w, "metrics no disponibles", http.StatusServiceUnavailable)
+		return
+	}
+	a.metrics.Handler().ServeHTTP(w, r)
+}
+
+func (a *Admin) SetMetrics(m *metrics.Metrics) { a.metrics = m }
+
 func (a *Admin) SetStorageOps(backup func() (any, error), list func() []store.BackupInfo, restore func(string) (map[string]int, error), delete func(string) error) {
 	a.bdBackup = backup
 	a.bdList = list
@@ -92,6 +104,7 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("GET /style.css", a.requirePage(a.serveAsset("style.css")))
 	mux.HandleFunc("GET /app.js", a.requirePage(a.serveAsset("app.js")))
 	mux.HandleFunc("GET /favicon.svg", a.serveAsset("favicon.svg"))
+	mux.HandleFunc("GET /metrics", a.metricsHandler)
 	mux.HandleFunc("GET /api/session", a.handleSession)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{"ok": true, "uptime_seconds": int(time.Since(a.started).Seconds())}
