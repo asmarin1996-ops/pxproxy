@@ -25,6 +25,7 @@ import (
 	"proxy/internal/auth"
 	"proxy/internal/certs"
 	"proxy/internal/config"
+	"proxy/internal/health"
 	"proxy/internal/metrics"
 	"proxy/internal/rules"
 	"proxy/internal/security"
@@ -279,6 +280,26 @@ func main() {
 	}
 
 	engine := rules.New(logger)
+	hcCfg := cfg.HealthCheck
+	if hcCfg.Enabled || hcCfg.IntervalSec > 0 || hcCfg.Failures > 0 {
+		hc := health.New(
+			time.Duration(hcCfg.IntervalSec)*time.Second,
+			time.Duration(hcCfg.TimeoutSec)*time.Second,
+			hcCfg.Failures,
+			logger,
+		)
+		hc.SetOnChange(func(target string, healthy bool) {
+			snap := hc.Snapshot()
+			m := make(map[string]bool, len(snap))
+			for _, s := range snap {
+				m[s.Target] = s.Healthy
+			}
+			metrics.Default.SetUpstreamHealth(m)
+		})
+		hc.Start(context.Background())
+		engine.SetHealthChecker(hc)
+		logger.Printf("health checks de upstreams activos (intervalo: %ds, timeout: %ds, fallos antes de marcar down: %d)", hcCfg.IntervalSec, hcCfg.TimeoutSec, hcCfg.Failures)
+	}
 	authn := auth.New(store)
 	if err := authn.Reload(); err != nil {
 		logger.Printf("aviso: Entra ID no disponible aun: %v", err)

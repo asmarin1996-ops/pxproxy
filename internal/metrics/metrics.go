@@ -16,6 +16,7 @@ type Metrics struct {
 	activeConns       int64
 	backendOk         int64
 	backendVersion    string
+	upstreamHealth    map[string]int64
 	mu                sync.RWMutex
 	startedAt         time.Time
 }
@@ -24,6 +25,7 @@ var Default = &Metrics{
 	requestTotal:      make(map[string]*uint64),
 	requestDurationNs: make(map[string]*uint64),
 	requestCount:      make(map[string]*uint64),
+	upstreamHealth:    make(map[string]int64),
 	startedAt:         time.Now(),
 }
 
@@ -66,6 +68,19 @@ func (m *Metrics) SetBackendOk(v bool) {
 	}
 }
 func (m *Metrics) SetBackendVersion(v string) { m.mu.Lock(); m.backendVersion = v; m.mu.Unlock() }
+
+func (m *Metrics) SetUpstreamHealth(health map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.upstreamHealth = make(map[string]int64, len(health))
+	for t, ok := range health {
+		if ok {
+			m.upstreamHealth[t] = 1
+		} else {
+			m.upstreamHealth[t] = 0
+		}
+	}
+}
 
 func (m *Metrics) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +169,23 @@ func (m *Metrics) Handler() http.Handler {
 		sb.WriteString("pxproxy_go_goroutines ")
 		sb.WriteString(itoa(uint64(runtime.NumGoroutine())))
 		sb.WriteString("\n")
+
+		m.mu.RLock()
+		if len(m.upstreamHealth) > 0 {
+			sb.WriteString("# HELP pxproxy_upstream_health Estado del upstream (1=saludable, 0=down).\n")
+			sb.WriteString("# TYPE pxproxy_upstream_health gauge\n")
+			for t, v := range m.upstreamHealth {
+				sb.WriteString("pxproxy_upstream_health{target=\"")
+				sb.WriteString(escapeMetric(t))
+				sb.WriteString("\"} ")
+				if v > 0 {
+					sb.WriteString("1\n")
+				} else {
+					sb.WriteString("0\n")
+				}
+			}
+		}
+		m.mu.RUnlock()
 
 		w.Write([]byte(sb.String()))
 	})

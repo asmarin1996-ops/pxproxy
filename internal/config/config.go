@@ -103,6 +103,13 @@ type ACMEConfig struct {
 	RedirectHTTP bool     `json:"redirect_http"`
 }
 
+type HealthCheckConfig struct {
+	Enabled     bool `json:"enabled"`
+	IntervalSec int  `json:"interval_sec"`
+	TimeoutSec  int  `json:"timeout_sec"`
+	Failures    int  `json:"failures"`
+}
+
 type Config struct {
 	AdminPort         int              `json:"admin_port"`
 	ProxyHTTPPort     int              `json:"proxy_http_port"`
@@ -125,6 +132,7 @@ type Config struct {
 	LDAP              LDAPConfig       `json:"ldap"`
 	LocalAdmin        LocalAdminConfig `json:"local_admin"`
 	TOTP              TOTPConfig       `json:"totp"`
+	HealthCheck       HealthCheckConfig `json:"health_check"`
 	Rules             []Rule           `json:"rules"`
 	Storage           StorageConfig    `json:"storage"`
 }
@@ -187,6 +195,15 @@ func normalize(c *Config) error {
 	}
 	if c.Storage.BackupKeep <= 0 {
 		c.Storage.BackupKeep = DefaultBackupKeep
+	}
+	if c.HealthCheck.IntervalSec <= 0 {
+		c.HealthCheck.IntervalSec = 30
+	}
+	if c.HealthCheck.TimeoutSec <= 0 {
+		c.HealthCheck.TimeoutSec = 5
+	}
+	if c.HealthCheck.Failures <= 0 {
+		c.HealthCheck.Failures = 3
 	}
 	return nil
 }

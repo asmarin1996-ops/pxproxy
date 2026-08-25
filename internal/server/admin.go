@@ -106,6 +106,7 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("GET /favicon.svg", a.serveAsset("favicon.svg"))
 	mux.HandleFunc("GET /metrics", a.metricsHandler)
 	mux.HandleFunc("GET /api/session", a.handleSession)
+	mux.HandleFunc("GET /api/upstream-health", a.requireAPI(a.handleUpstreamHealth))
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{"ok": true, "uptime_seconds": int(time.Since(a.started).Seconds())}
 		if a.healthDetail != nil {
@@ -624,6 +625,10 @@ func (a *Admin) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit.Log("setup_completed", security.ClientIP(r), "", warning)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": warning})
+}
+
+func (a *Admin) handleUpstreamHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"upstreams": a.engine.TargetHealth()})
 }
 
 func (a *Admin) handleLDAPTest(w http.ResponseWriter, r *http.Request) {

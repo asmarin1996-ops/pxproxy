@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"proxy/internal/config"
+	"proxy/internal/health"
 )
 
 type route struct {
@@ -18,13 +19,19 @@ type route struct {
 }
 
 type Engine struct {
-	mu     sync.RWMutex
-	routes map[string]*route
-	logger *log.Logger
+	mu      sync.RWMutex
+	routes  map[string]*route
+	logger  *log.Logger
+	health  *health.Checker
+	targets []string
 }
 
 func New(logger *log.Logger) *Engine {
 	return &Engine{routes: make(map[string]*route), logger: logger}
+}
+
+func (e *Engine) SetHealthChecker(hc *health.Checker) {
+	e.health = hc
 }
 
 func NormalizeHost(h string) string {
@@ -37,6 +44,7 @@ func NormalizeHost(h string) string {
 
 func (e *Engine) Rebuild(list []config.Rule) {
 	next := make(map[string]*route, len(list))
+	targets := make([]string, 0, len(list))
 	for _, rl := range list {
 		host := NormalizeHost(rl.Host)
 		if host == "" {
@@ -50,6 +58,8 @@ func (e *Engine) Rebuild(list []config.Rule) {
 				continue
 			}
 			tgt := target
+			tgtStr := tgt.String()
+			targets = append(targets, tgtStr)
 			rt.rp = &httputil.ReverseProxy{
 				Rewrite: func(pr *httputil.ProxyRequest) {
 					pr.SetURL(tgt)
@@ -66,7 +76,11 @@ func (e *Engine) Rebuild(list []config.Rule) {
 	}
 	e.mu.Lock()
 	e.routes = next
+	e.targets = targets
 	e.mu.Unlock()
+	if e.health != nil {
+		e.health.SetTargets(targets)
+	}
 }
 
 func (e *Engine) lookup(host string) *route {
@@ -142,6 +156,12 @@ func (e *Engine) Handler(authCheck func(*http.Request) bool, unauthorized http.H
 			writeBlockedPage(w)
 			return
 		}
+		if e.health != nil && !e.health.IsHealthy(rt.rule.Target) {
+			e.logger.Printf("upstream no saludable: %s (%s)", rt.rule.Host, rt.rule.Target)
+			w.Header().Set("Retry-After", "30")
+			http.Error(w, "503: el servicio de destino no esta disponible temporalmente", http.StatusServiceUnavailable)
+			return
+		}
 		if rt.rule.RequireAuth && !authCheck(r) {
 			unauthorized(w, r)
 			return
@@ -154,4 +174,11 @@ func (e *Engine) Count() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.routes)
+}
+
+func (e *Engine) TargetHealth() []health.Status {
+	if e.health == nil {
+		return nil
+	}
+	return e.health.Snapshot()
 }
