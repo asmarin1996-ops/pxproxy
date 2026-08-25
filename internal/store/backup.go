@@ -107,3 +107,11 @@ func PruneBackupFiles(dir string, keep int) {
 		_ = os.Remove(filepath.Join(dir, list[i].File))
 	}
 }
+
+func DeleteBackupFile(dir, name string) error {
+	clean := filepath.Base(name)
+	if clean == "." || clean == "/" || filepath.Ext(clean) != ".json" {
+		return ErrBadSnapshot
+	}
+	return os.Remove(filepath.Join(dir, clean))
+}

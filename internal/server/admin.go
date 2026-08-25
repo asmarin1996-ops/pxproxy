@@ -45,6 +45,7 @@ type Admin struct {
 	bdBackup  func() (any, error)
 	bdList    func() []store.BackupInfo
 	bdRestore func(string) (map[string]int, error)
+	bdDelete  func(string) error
 }
 
 type storageReq struct {
@@ -69,10 +70,11 @@ func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, c
 
 func (a *Admin) SetHealthDetail(fn func() map[string]any) { a.healthDetail = fn }
 
-func (a *Admin) SetStorageOps(backup func() (any, error), list func() []store.BackupInfo, restore func(string) (map[string]int, error)) {
+func (a *Admin) SetStorageOps(backup func() (any, error), list func() []store.BackupInfo, restore func(string) (map[string]int, error), delete func(string) error) {
 	a.bdBackup = backup
 	a.bdList = list
 	a.bdRestore = restore
+	a.bdDelete = delete
 }
 
 func (a *Admin) Routes() http.Handler {
@@ -143,6 +145,23 @@ func (a *Admin) Routes() http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": done})
+	}))
+	mux.HandleFunc("POST /api/storage/delete", a.requireAPI(func(w http.ResponseWriter, r *http.Request) {
+		if a.bdDelete == nil {
+			jsonErr(w, http.StatusBadRequest, "la eliminacion requiere storage.backend=postgres")
+			return
+		}
+		var req storageReq
+		if err := decodeJSON(r, &req); err != nil {
+			writeDecodeErr(w, err)
+			return
+		}
+		if err := a.bdDelete(req.File); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		a.audit.Log("bd_backup_deleted", security.ClientIP(r), "", req.File)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 	mux.HandleFunc("POST /api/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/ldap-test", a.requireAPI(a.handleLDAPTest))

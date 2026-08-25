@@ -131,6 +131,7 @@ async function loadBackups() {
         <span style="min-width:60px;text-align:right" class="muted small">${kb} KB</span>
         <span style="min-width:90px;text-align:right" class="muted small">${fecha}</span>
         <button class="btn small danger bd-restore" data-file="${esc(b.file)}" type="button">Restaurar</button>
+        <button class="btn small ghost bd-delete" data-file="${esc(b.file)}" type="button" title="Eliminar copia">&#10005;</button>
       </div>`;
     }).join('');
   } catch (e) {
@@ -159,6 +160,21 @@ async function restoreBackup(file) {
     el.textContent = 'Restaurando...';
     await api('/api/storage/restore', { method: 'POST', body: JSON.stringify({file}) });
     el.textContent = 'Restaurado correctamente';
+    loadBackups();
+    setTimeout(() => el.textContent = '', 2000);
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function deleteBackup(file) {
+  if (!confirm('Eliminar la copia de seguridad?\nEsta accion no se puede deshacer.'));
+    return;
+  const el = document.getElementById('bd-action');
+  try {
+    el.textContent = 'Eliminando...';
+    await api('/api/storage/delete', { method: 'POST', body: JSON.stringify({file}) });
+    el.textContent = 'Eliminado';
     loadBackups();
     setTimeout(() => el.textContent = '', 2000);
   } catch (e) {
@@ -563,8 +579,10 @@ document.getElementById('certs-tbody').addEventListener('click', async e => {
 document.getElementById('btn-bd-backup').addEventListener('click', doBackup);
 
 document.getElementById('bd-list').addEventListener('click', e => {
-  const btn = e.target.closest('.bd-restore');
-  if (btn) restoreBackup(btn.dataset.file);
+  const restore = e.target.closest('.bd-restore');
+  if (restore) { restoreBackup(restore.dataset.file); return; }
+  const del = e.target.closest('.bd-delete');
+  if (del) deleteBackup(del.dataset.file);
 });
 
 loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadBackups(), loadTOTP(), loadCerts()])).catch(err => console.error(err));

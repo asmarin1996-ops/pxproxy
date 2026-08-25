@@ -406,6 +406,13 @@ func main() {
 				}
 				return done, err
 			},
+			func(file string) error {
+				clean := filepath.Base(strings.TrimSpace(file))
+				if clean == "." || clean == "/" || filepath.Ext(clean) != ".json" {
+					return fmt.Errorf("fichero de backup no valido")
+				}
+				return pgstore.DeleteBackupFile(bdBackupDir, clean)
+			},
 		)
 		watchCtx, watchCancel := context.WithCancel(context.Background())
 		defer watchCancel()
