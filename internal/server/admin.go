@@ -23,6 +23,7 @@ import (
 	"proxy/internal/rules"
 	"proxy/internal/security"
 	"proxy/internal/store"
+	"proxy/internal/stream"
 )
 
 const secretMask = "***SET***"
@@ -44,6 +45,7 @@ type Admin struct {
 
 	healthDetail func() map[string]any
 	metrics      *metrics.Metrics
+	streamStatus func() []stream.Status
 
 	bdBackup  func() (any, error)
 	bdList    func() []store.BackupInfo
@@ -72,6 +74,9 @@ func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, c
 }
 
 func (a *Admin) SetHealthDetail(fn func() map[string]any) { a.healthDetail = fn }
+
+// SetStreamStatus registra el proveedor del estado de los listeners de stream.
+func (a *Admin) SetStreamStatus(fn func() []stream.Status) { a.streamStatus = fn }
 
 func (a *Admin) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	if a.metrics == nil {
@@ -188,6 +193,8 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("GET /api/totp", a.requireAPI(a.handleTOTPGet))
 	mux.HandleFunc("POST /api/totp/settings", a.requireAPI(a.handleTOTPSettings))
 	mux.HandleFunc("POST /api/totp/reset", a.requireAPI(a.handleTOTPReset))
+	mux.HandleFunc("GET /api/stream", a.requireAPI(a.handleStreamGet))
+	mux.HandleFunc("POST /api/stream", a.requireAPI(a.handleStreamPost))
 	mux.HandleFunc("GET /api/certs", a.requireAPI(a.handleCertsGet))
 	mux.HandleFunc("GET /api/certs/status", a.requireAPI(a.handleCertsStatus))
 	mux.HandleFunc("POST /api/certs/acme", a.requireAPI(a.handleCertACMESet))
@@ -487,6 +494,70 @@ func (a *Admin) handleRulesDelete(w http.ResponseWriter, r *http.Request) {
 	a.rebuild()
 	a.audit.Log("rule_delete", security.ClientIP(r), r.Header.Get("X-Px-User"), target)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rules": a.store.Get().Rules})
+}
+
+func (a *Admin) handleStreamGet(w http.ResponseWriter, r *http.Request) {
+	cfg := a.store.Get()
+	out := make([]stream.Status, 0, len(cfg.StreamRules))
+	if a.streamStatus != nil {
+		out = a.streamStatus()
+	} else {
+		for _, s := range cfg.StreamRules {
+			out = append(out, stream.Status{
+				Listen:  s.Listen,
+				Target:  s.Target,
+				TLS:     s.TLS,
+				SNIHost: s.SNIHost,
+				Enabled: s.Enabled,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stream_rules": out})
+}
+
+func (a *Admin) handleStreamPost(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StreamRules []config.StreamRule `json:"stream_rules"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	seen := map[string]bool{}
+	for i := range req.StreamRules {
+		s := &req.StreamRules[i]
+		s.Listen = strings.TrimSpace(s.Listen)
+		s.Target = strings.TrimSpace(s.Target)
+		if err := stream.ValidateAddress(s.Listen); err != nil {
+			jsonErr(w, http.StatusBadRequest, "listen invalido: "+err.Error())
+			return
+		}
+		if err := stream.ValidateAddress(s.Target); err != nil {
+			jsonErr(w, http.StatusBadRequest, "target invalido: "+err.Error())
+			return
+		}
+		key := strings.ToLower(s.Listen)
+		if seen[key] {
+			jsonErr(w, http.StatusBadRequest, "listen duplicado: "+s.Listen)
+			return
+		}
+		seen[key] = true
+	}
+	err := a.store.Update(func(c *config.Config) {
+		c.StreamRules = req.StreamRules
+	})
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "no se pudo guardar")
+		return
+	}
+	enabled := 0
+	for _, s := range req.StreamRules {
+		if s.Enabled {
+			enabled++
+		}
+	}
+	a.audit.Log("stream_update", security.ClientIP(r), r.Header.Get("X-Px-User"), fmt.Sprintf("%d reglas (%d activas); reinicio requerido para aplicar listeners", len(req.StreamRules), enabled))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": "cambios de listeners requieren reinicio para aplicarse"})
 }
 
 func (a *Admin) handleConfigGet(w http.ResponseWriter, r *http.Request) {

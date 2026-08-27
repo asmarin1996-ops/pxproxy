@@ -93,6 +93,19 @@ type Rule struct {
 	Enabled       bool            `json:"enabled"`
 }
 
+// StreamRule es una regla de reenvio TCP (stream proxy) con terminacion TLS
+// opcional. Escucha en Listen y reenvia a Target; si TLS es true, termina el
+// TLS entrante (SNI resuelto por el gestor de certificados) y habla texto
+// plano con el destino.
+type StreamRule struct {
+	Listen     string `json:"listen"`
+	Target     string `json:"target"`
+	TLS        bool   `json:"tls"`
+	SNIHost    string `json:"sni_host,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+	Enabled    bool   `json:"enabled"`
+}
+
 type TOTPSecret struct {
 	Secret    string `json:"secret"`
 	Confirmed bool   `json:"confirmed"`
@@ -142,8 +155,9 @@ type Config struct {
 	LocalAdmin        LocalAdminConfig `json:"local_admin"`
 	TOTP              TOTPConfig       `json:"totp"`
 	HealthCheck       HealthCheckConfig `json:"health_check"`
-	Rules             []Rule           `json:"rules"`
-	Storage           StorageConfig    `json:"storage"`
+	Rules             []Rule            `json:"rules"`
+	StreamRules       []StreamRule      `json:"stream_rules"`
+	Storage           StorageConfig     `json:"storage"`
 }
 
 func sealSensitive(c *Config) {
@@ -269,6 +283,7 @@ func Load(path string) (*Store, error) {
 		LDAP:           LDAPConfig{UserFilter: "(sAMAccountName=%s)"},
 		LocalAdmin:     LocalAdminConfig{Enabled: true, Username: DefaultAdminUsername},
 		Rules:          []Rule{},
+		StreamRules:    []StreamRule{},
 	}
 	if data, err := os.ReadFile(path); err == nil {
 		data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})

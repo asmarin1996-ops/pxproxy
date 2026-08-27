@@ -54,7 +54,7 @@ function initTabs() {
   });
 }
 
-const KNOWN_VIEWS = ['estado', 'dashboard', 'reglas', 'ajustes', 'identidad', 'seguridad', 'backups', 'twofa', 'certs'];
+const KNOWN_VIEWS = ['estado', 'dashboard', 'reglas', 'ajustes', 'identidad', 'seguridad', 'backups', 'twofa', 'certs', 'stream'];
 
 function showView(name) {
   if (!KNOWN_VIEWS.includes(name)) name = 'estado';
@@ -661,6 +661,78 @@ document.getElementById('certs-tbody').addEventListener('click', async e => {
 
 document.getElementById('btn-bd-backup').addEventListener('click', doBackup);
 
+let streamState = [];
+async function loadStream() {
+  const d = await api('/api/stream');
+  streamState = d.stream_rules || [];
+  renderStream(streamState);
+}
+function streamConfigOf(r) {
+  return { listen: r.listen, target: r.target, tls: !!r.tls, sni_host: r.sni_host || '', enabled: !!r.enabled };
+}
+function renderStream(rules) {
+  const tbody = document.getElementById('stream-tbody');
+  const active = rules.filter(r => r.enabled).length;
+  document.getElementById('stream-count').textContent = active + ' activo(s)';
+  if (!rules.length) { tbody.innerHTML = '<tr><td colspan="7" class="muted">Sin reglas de stream. Anade una abajo.</td></tr>'; return; }
+  tbody.innerHTML = rules.map((r, idx) => {
+    let estado = r.enabled
+      ? (r.running
+          ? '<span class="pill" style="color:var(--green);border-color:rgba(63,185,80,.5)">activo</span>'
+          : '<span class="muted small">detenido' + (r.error ? ': ' + esc(r.error) : '') + '</span>')
+      : '<span class="muted small">deshabilitada</span>';
+    return `<tr data-idx="${idx}">
+      <td><code>${esc(r.listen)}</code></td>
+      <td><code style="font-size:11px">${esc(r.target)}</code></td>
+      <td>${r.tls ? '<span class="pill" style="font-size:10px">TLS</span>' : '-'}</td>
+      <td><code style="font-size:11px">${esc(r.sni_host || '')}</code></td>
+      <td>${estado}</td>
+      <td><input type="checkbox" class="tgl-sen" ${r.enabled ? 'checked' : ''}></td>
+      <td><button class="btn danger small del-stream" type="button">Eliminar</button></td>
+    </tr>`;
+  }).join('');
+}
+async function saveStream(rules) {
+  const rulesCfg = rules.map(streamConfigOf);
+  await api('/api/stream', { method: 'POST', body: JSON.stringify({ stream_rules: rulesCfg }) });
+  streamState = rules;
+  renderStream(streamState);
+}
+document.getElementById('form-stream').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target;
+  const rule = {
+    listen: f.listen.value.trim(),
+    target: f.target.value.trim(),
+    tls: f.tls.checked,
+    sni_host: f.sni_host.value.trim(),
+    enabled: true,
+  };
+  if (!rule.listen || !rule.target) { toast('Escucha y destino son obligatorios', true); return; }
+  if (streamState.some(r => r.listen === rule.listen)) { toast('Ya existe una regla en ' + rule.listen, true); return; }
+  streamState.push(rule);
+  try { await saveStream(streamState); toast('Regla de stream guardada (activa tras reiniciar)', 'ok'); f.reset(); }
+  catch (err) { streamState.pop(); toast(err.message, true); }
+});
+document.getElementById('stream-tbody').addEventListener('change', async e => {
+  if (!e.target.classList.contains('tgl-sen')) return;
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const idx = Number(tr.dataset.idx);
+  if (isNaN(idx) || !streamState[idx]) return;
+  streamState[idx].enabled = e.target.checked;
+  try { await saveStream(streamState); } catch (err) { toast(err.message, true); loadStream(); }
+});
+document.getElementById('stream-tbody').addEventListener('click', async e => {
+  const btn = e.target.closest('.del-stream'); if (!btn) return;
+  const tr = btn.closest('tr'); if (!tr) return;
+  const idx = Number(tr.dataset.idx);
+  if (isNaN(idx) || !streamState[idx]) return;
+  if (!confirm('Eliminar la regla de stream que escucha en ' + streamState[idx].listen + '?')) return;
+  const gone = streamState.splice(idx, 1)[0];
+  try { await saveStream(streamState); toast('Regla ' + gone.listen + ' eliminada', 'ok'); }
+  catch (err) { streamState.splice(idx, 0, gone); loadStream(); toast(err.message, true); }
+});
+
 document.getElementById('bd-list').addEventListener('click', e => {
   const restore = e.target.closest('.bd-restore');
   if (restore) { restoreBackup(restore.dataset.file); return; }
@@ -668,7 +740,7 @@ document.getElementById('bd-list').addEventListener('click', e => {
   if (del) deleteBackup(del.dataset.file);
 });
 
-loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadBackups(), loadTOTP(), loadCerts()])).catch(err => console.error(err));
+loadSession().then(() => Promise.all([loadRules(), loadConfig(), loadSecurity(), loadBackups(), loadTOTP(), loadCerts(), loadStream()])).catch(err => console.error(err));
 
 /* ===== DASHBOARD ===== */
 const MAX_DASH_POINTS = 30;

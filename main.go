@@ -31,6 +31,7 @@ import (
 	"proxy/internal/rules"
 	"proxy/internal/security"
 	"proxy/internal/server"
+	"proxy/internal/stream"
 	pgstore "proxy/internal/store"
 )
 
@@ -373,10 +374,17 @@ func main() {
 	defer close(saveStop)
 
 	admin := server.New(store, engine, authn, certMgr, sub, logger, audit, limIP, limUser, limTOTP)
+	var streamMgr *stream.Manager
 	admin.SetMetrics(metrics.Default)
 	admin.SetHealthDetail(func() map[string]any {
 		name, ok, ver := store.BackendStatus()
 		return map[string]any{"storage": map[string]any{"backend": name, "ok": ok, "version": ver}}
+	})
+	admin.SetStreamStatus(func() []stream.Status {
+		if streamMgr == nil {
+			return nil
+		}
+		return streamMgr.Status(store.Get().StreamRules)
 	})
 	engine.SetTLSLax(cfg.InsecureUpstream)
 	engine.Rebuild(cfg.Rules)
@@ -463,6 +471,9 @@ func main() {
 			c := store.Get()
 			engine.SetTLSLax(c.InsecureUpstream)
 			engine.Rebuild(c.Rules)
+			if streamMgr != nil {
+				streamMgr.Apply(c.StreamRules)
+			}
 			if aerr := authn.Reload(); aerr != nil {
 				logger.Printf("aviso: recarga de proveedores de identidad: %v", aerr)
 			}
@@ -680,37 +691,40 @@ func main() {
 
 	var tlsSrv *http.Server
 	useTLSMgr := useACME || certMgr.CustomCount() > 0
+
+	certFor := func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if c, ok := certMgr.CustomCertificate(hello); ok {
+			return c, nil
+		}
+		if acmeMgr != nil {
+			host := rules.NormalizeHost(hello.ServerName)
+			if host != "" && !acmeCertCached(host) && !hostAllowedACME(host) {
+				return nil, fmt.Errorf("dominio %q sin certificado", hello.ServerName)
+			}
+			type certRes struct {
+				c   *tls.Certificate
+				err error
+			}
+			ch := make(chan certRes, 1)
+			go func(h *tls.ClientHelloInfo) {
+				c, err := acmeMgr.GetCertificate(h)
+				ch <- certRes{c, err}
+			}(hello)
+			select {
+			case cr := <-ch:
+				return cr.c, cr.err
+			case <-time.After(30 * time.Second):
+				return nil, fmt.Errorf("timeout emitiendo cert ACME para %q; reintenta en unos segundos", host)
+			}
+		}
+		return nil, fmt.Errorf("sin certificado para %q", hello.ServerName)
+	}
+
 	switch {
 	case useTLSMgr:
 		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				if c, ok := certMgr.CustomCertificate(hello); ok {
-					return c, nil
-				}
-				if acmeMgr != nil {
-					host := rules.NormalizeHost(hello.ServerName)
-					if host != "" && !acmeCertCached(host) && !hostAllowedACME(host) {
-						return nil, fmt.Errorf("dominio %q sin certificado", hello.ServerName)
-					}
-					type certRes struct {
-						c   *tls.Certificate
-						err error
-					}
-					ch := make(chan certRes, 1)
-					go func(h *tls.ClientHelloInfo) {
-						c, err := acmeMgr.GetCertificate(h)
-						ch <- certRes{c, err}
-					}(hello)
-					select {
-					case cr := <-ch:
-						return cr.c, cr.err
-					case <-time.After(30 * time.Second):
-						return nil, fmt.Errorf("timeout emitiendo cert ACME para %q; reintenta en unos segundos", host)
-					}
-				}
-				return nil, fmt.Errorf("sin certificado para %q", hello.ServerName)
-			},
+			MinVersion:    tls.VersionTLS12,
+			GetCertificate: certFor,
 		}
 		tlsSrv = &http.Server{
 			Addr:              fmt.Sprintf(":%d", cfg.ProxyHTTPSPort),
@@ -749,6 +763,9 @@ func main() {
 		logger.Printf("proxy-https deshabilitado (sin certificado ni ACME configurado)")
 	}
 
+	streamMgr = stream.New(logger, certFor)
+	streamMgr.Apply(store.Get().StreamRules)
+
 	<-ctx.Done()
 	logger.Printf("apagando...")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -757,6 +774,9 @@ func main() {
 		if s != nil {
 			_ = s.Shutdown(shutCtx)
 		}
+	}
+	if streamMgr != nil {
+		streamMgr.Close()
 	}
 	wg.Wait()
 	logger.Printf("listo")

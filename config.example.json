@@ -17,5 +17,8 @@
   "rules": [
     { "host": "app.midominio.local", "target": "http://127.0.0.1:3000", "require_auth": false, "enabled": true }
   ],
+  "stream_rules": [
+    { "listen": "0.0.0.0:993", "target": "127.0.0.1:143", "tls": true, "sni_host": "", "enabled": false }
+  ],
   "storage": { "backend": "file", "dsn": "" }
 }
