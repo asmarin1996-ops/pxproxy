@@ -33,6 +33,7 @@ import (
 	"proxy/internal/server"
 	"proxy/internal/stream"
 	pgstore "proxy/internal/store"
+	"proxy/internal/update"
 )
 
 //go:embed all:web
@@ -216,7 +217,35 @@ func main() {
 	httpsPort := flag.Int("proxy-https-port", 0, "puerto HTTPS del proxy (sobrescribe la configuracion, no se persiste)")
 	backupBD := flag.String("backup-bd", "", "copia de seguridad de la BD hacia el fichero indicado y sale")
 	restoreBD := flag.String("restore-bd", "", "restaura la BD desde el fichero indicado y sale")
+	updateCheck := flag.Bool("update-check", false, "comprueba si hay una nueva version en GitHub y sale")
+	updateApply := flag.Bool("update", false, "descarga e instala la ultima version publicada en GitHub y sale")
 	flag.Parse()
+
+	if *updateCheck || *updateApply {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if *updateApply {
+			exe, err := update.Apply(ctx, version)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "actualizacion fallida: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("actualizado correctamente a la ultima version en %s. Reinicia pxproxy para completar. El binario anterior quedo como %s.bak\n", exe, exe)
+			return
+		}
+		st, err := update.Check(ctx, version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no se pudo comprobar actualizaciones: %v\n", err)
+			os.Exit(1)
+		}
+		avail := "no"
+		if st.UpdateAvailable {
+			avail = "si"
+		}
+		fmt.Printf("version instalada: %s\nversion disponible: %s\nactualizacion disponible: %s\nasset: %s\nreleases: %s\n",
+			st.InstalledVersion, st.LatestVersion, avail, st.AssetName, st.ReleaseURL)
+		return
+	}
 
 	logger := log.New(os.Stdout, "[pxproxy] ", log.LstdFlags)
 	logger.Printf("PxProxy v%s iniciando (%s/%s)", version, runtime.GOOS, runtime.GOARCH)
@@ -375,6 +404,7 @@ func main() {
 
 	admin := server.New(store, engine, authn, certMgr, sub, logger, audit, limIP, limUser, limTOTP)
 	var streamMgr *stream.Manager
+	admin.SetVersion(version)
 	admin.SetMetrics(metrics.Default)
 	admin.SetHealthDetail(func() map[string]any {
 		name, ok, ver := store.BackendStatus()

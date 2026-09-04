@@ -16,7 +16,7 @@ import (
 
 const totpStep = 30 * time.Second
 const totpDigits = 6
-const totpSkew = 1
+const totpSkew = 2
 
 func GenerateTOTPSecret() (string, error) {
 	raw := make([]byte, 20)
@@ -31,7 +31,11 @@ func normalizeSecret(secret string) ([]byte, error) {
 	if len(clean) < 16 {
 		return nil, errors.New("secreto TOTP demasiado corto")
 	}
-	return base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(clean)
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(clean)
+	if err != nil {
+		return nil, errors.New("secreto TOTP no valido")
+	}
+	return key, nil
 }
 
 func hotp(key []byte, counter uint64) string {
@@ -63,6 +67,13 @@ func TOTPCode(secret string, t time.Time) (string, error) {
 }
 
 func VerifyTOTPCode(secret, code string) bool {
+	return verifyTOTPCodeAt(secret, code, time.Now())
+}
+
+// verifyTOTPCodeAt comprueba un codigo TOTP en un instante dado. Se usa
+// internamente para poder probar la tolerancia al desfase de reloj (skew) de
+// forma determinista.
+func verifyTOTPCodeAt(secret, code string, at time.Time) bool {
 	key, err := normalizeSecret(secret)
 	if err != nil {
 		return false
@@ -71,7 +82,7 @@ func VerifyTOTPCode(secret, code string) bool {
 	if len(code) != totpDigits {
 		return false
 	}
-	now := uint64(time.Now().Unix() / int64(totpStep/time.Second))
+	now := uint64(at.Unix() / int64(totpStep/time.Second))
 	valid := false
 	for d := int64(0); d <= totpSkew; d++ {
 		for _, c := range []uint64{now + uint64(d), now - uint64(d)} {

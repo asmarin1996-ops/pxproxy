@@ -526,7 +526,57 @@ document.addEventListener('submit', async e => {
   }
 });
 
+async function loadUpdateInfo() {
+  const el = {
+    installed: document.getElementById('up-installed'),
+    latest: document.getElementById('up-latest'),
+    state: document.getElementById('up-state'),
+    apply: document.getElementById('btn-update-apply'),
+  };
+  el.state.textContent = 'Consultando...';
+  try {
+    const st = await api('/api/update');
+    el.installed.textContent = st.installed_version || '-';
+    el.latest.textContent = st.latest_version || '-';
+    if (st.error) {
+      el.state.textContent = 'Error: ' + st.error;
+      el.apply.disabled = true;
+      return;
+    }
+    if (st.update_available) {
+      el.state.textContent = 'Hay una version nueva disponible';
+      el.apply.disabled = false;
+    } else {
+      el.state.textContent = 'Ya tienes la ultima version';
+      el.apply.disabled = true;
+    }
+  } catch (err) {
+    el.state.textContent = 'No se pudo consultar: ' + err.message;
+    el.apply.disabled = true;
+  }
+}
+
+document.getElementById('btn-update-check').addEventListener('click', loadUpdateInfo);
+document.getElementById('btn-update-apply').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-update-apply');
+  btn.disabled = true;
+  try {
+    const res = await api('/api/update', { method: 'POST' });
+    if (res.await_restart) {
+      toast('Version ' + res.new_version + ' descargada. El servicio se reiniciara en unos segundos.');
+      setTimeout(loadUpdateInfo, 12000);
+    } else {
+      toast(res.reason || 'Sin actualizaciones');
+      setTimeout(loadUpdateInfo, 1500);
+    }
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+  }
+});
+
 initTabs();
+loadUpdateInfo();
 async function loadCerts() {
   const d = await api('/api/certs');
   const f = document.getElementById('form-certs-acme');

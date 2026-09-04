@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +29,7 @@ import (
 	"proxy/internal/security"
 	"proxy/internal/store"
 	"proxy/internal/stream"
+	"proxy/internal/update"
 )
 
 const secretMask = "***SET***"
@@ -42,6 +48,8 @@ type Admin struct {
 	limUser *security.Limiter
 	limTOTP *security.Limiter
 	started time.Time
+
+	version string
 
 	healthDetail func() map[string]any
 	metrics      *metrics.Metrics
@@ -74,6 +82,9 @@ func New(store *config.Store, engine *rules.Engine, authn *auth.Authenticator, c
 }
 
 func (a *Admin) SetHealthDetail(fn func() map[string]any) { a.healthDetail = fn }
+
+// SetVersion registra la version del binario en ejecucion (p.ej. "v2.5.0").
+func (a *Admin) SetVersion(v string) { a.version = v }
 
 // SetStreamStatus registra el proveedor del estado de los listeners de stream.
 func (a *Admin) SetStreamStatus(fn func() []stream.Status) { a.streamStatus = fn }
@@ -201,6 +212,8 @@ func (a *Admin) Routes() http.Handler {
 	mux.HandleFunc("POST /api/certs/custom", a.requireAPI(a.handleCertCustomPut))
 	mux.HandleFunc("POST /api/certs/custom/delete", a.requireAPI(a.handleCertCustomDelete))
 	mux.HandleFunc("POST /api/certs/renew", a.requireAPI(a.handleCertRenew))
+	mux.HandleFunc("GET /api/update", a.requireAPI(a.handleUpdateInfo))
+	mux.HandleFunc("POST /api/update", a.requireAPI(a.handleUpdateApply))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
@@ -1022,7 +1035,7 @@ func (a *Admin) handleLocalPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if config.CheckPassword(cfg.LocalAdmin.PasswordHash, body.Current) != nil {
 		a.audit.Log("password_change_failed", security.ClientIP(r), cfg.LocalAdmin.Username, "contrasena actual incorrecta")
-		jsonErr(w, http.StatusUnauthorized, "la contrasena actual no es correcta")
+		jsonErr(w, http.StatusBadRequest, "la contrasena actual no es correcta")
 		return
 	}
 	hash, err := config.HashPassword(body.Next)
@@ -1038,6 +1051,169 @@ func (a *Admin) handleLocalPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleUpdateInfo consulta la ultima version publicada en GitHub y devuelve
+// el estado junto con la version instalada.
+func (a *Admin) handleUpdateInfo(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	st, err := update.Check(ctx, a.version)
+	if err != nil {
+		jsonErr(w, http.StatusBadGateway, "no se pudo comprobar actualizaciones: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// handleUpdateApply descarga e instala la ultima version publicada y programa
+// el reinicio del proceso una vez reemplazado el binario.
+func (a *Admin) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	st, err := update.Check(r.Context(), a.version)
+	if err != nil {
+		jsonErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if !st.UpdateAvailable {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": "ya tienes la ultima version"})
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "no se pudo localizar el binario: "+err.Error())
+		return
+	}
+	exeAbs, _ := filepath.Abs(exe)
+	dir := filepath.Dir(exeAbs)
+	tmp := filepath.Join(dir, "pxproxy.update")
+
+	ctx, cancel := context.WithTimeout(r.Context(), updateTimeout)
+	defer cancel()
+	rel, err := update.FetchLatestRelease(ctx)
+	if err != nil {
+		jsonErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	asset, err := update.FindAsset(rel)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := rel.DownloadAsset(ctx, asset, tmp); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "fallo la descarga: "+err.Error())
+		return
+	}
+
+	script, err := scheduleRestart(exeAbs, tmp, a.startArgs())
+	if err != nil {
+		os.Remove(tmp)
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.audit.Log("update_scheduled", security.ClientIP(r), "", "a "+rel.TagName)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":              true,
+		"new_version":     rel.TagName,
+		"restart_script":  script,
+		"await_restart":   true,
+	})
+	go tryRunAsync(script)
+}
+
+const updateTimeout = 60 * time.Second
+
+// startArgs devuelve los argumentos con los que se arranco el proceso actual.
+func (a *Admin) startArgs() []string {
+	return os.Args[1:]
+}
+
+// scheduleRestart escribe un script que espera a que termine el proceso actual,
+// reemplaza el binario por la version nueva (guardando el anterior como .bak)
+// y relanza el proceso con los mismos argumentos.
+func scheduleRestart(exe, tmp string, args []string) (string, error) {
+	dir := filepath.Dir(exe)
+	name := filepath.Base(exe)
+	backup := exe + ".bak"
+	script := filepath.Join(dir, "pxproxy-restart"+scriptExt())
+	pid := os.Getpid()
+
+	if runtime.GOOS == "windows" {
+		cmd := "@echo off\r\n" +
+			"rem pxproxy auto-update\r\n" +
+			":WAIT\r\n" +
+			"tasklist /FI \"PID eq " + itoa(pid) + "\" 2>nul | findstr \"" + itoa(pid) + "\" >nul\r\n" +
+			"if errorlevel 1 goto DOIT\r\n" +
+			"timeout /t 1 /nobreak >nul\r\n" +
+			"goto WAIT\r\n" +
+			":DOIT\r\n" +
+			"copy /y \"" + tmp + "\" \"" + backup + "\" >nul\r\n" +
+			"move /y \"" + tmp + "\" \"" + exe + "\" >nul\r\n" +
+			"del \"" + backup + "\" >nul 2>nul\r\n" +
+			"start \"\" /b \"" + exe + "\"" + cmdArgs(args) + "\r\n" +
+			"del \"%~f0\" >nul 2>nul\r\n"
+		if err := os.WriteFile(script, []byte(cmd), 0700); err != nil {
+			return "", err
+		}
+		return script, nil
+	}
+
+	if name == "" {
+		name = "pxproxy"
+	}
+	sh := "#!/bin/sh\n" +
+		"while kill -0 " + itoa(pid) + " 2>/dev/null; do sleep 1; done\n" +
+		"mv -f \"" + tmp + "\" \"" + backup + "\"\n" +
+		"mv -f \"" + backup + "\" \"" + exe + "\"\n" +
+		"chmod 755 \"" + exe + "\"\n" +
+		"nohup \"" + exe + "\"" + shArgs(args) + " >/dev/null 2>&1 &\n" +
+		"rm -f \"$0\"\n"
+	if err := os.WriteFile(script, []byte(sh), 0700); err != nil {
+		return "", err
+	}
+	return script, nil
+}
+
+func scriptExt() string {
+	if runtime.GOOS == "windows" {
+		return ".cmd"
+	}
+	return ".sh"
+}
+
+func cmdArgs(args []string) string {
+	var b strings.Builder
+	for _, a := range args {
+		b.WriteString(" \"")
+		b.WriteString(strings.ReplaceAll(a, `"`, `""`))
+		b.WriteString("\"")
+	}
+	return b.String()
+}
+
+func shArgs(args []string) string {
+	var b strings.Builder
+	for _, a := range args {
+		b.WriteString(" '")
+		b.WriteString(strings.ReplaceAll(a, "'", `'\''`))
+		b.WriteString("'")
+	}
+	return b.String()
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+// tryRunAsync lanza el script de reinicio en segundo plano sin bloquear.
+func tryRunAsync(script string) {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", script)
+		cmd = setDetached(cmd)
+		_ = cmd.Start()
+		return
+	}
+	cmd := exec.Command(script)
+	cmd = setDetached(cmd)
+	_ = cmd.Start()
+}
+
 const totpPageHead = loginPageHead
 
 func (a *Admin) twofaError(errMsg string) string {
@@ -1050,6 +1226,14 @@ func (a *Admin) twofaError(errMsg string) string {
 func (a *Admin) handle2FAPage(w http.ResponseWriter, r *http.Request) {
 	if _, err := a.auth.PendingFromRequest(r); err != nil {
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
+		return
+	}
+	// Si el usuario aun no tiene un secreto confirmado, llevarlo a la
+	// pantalla de inscripcion en lugar de pedirle un codigo que no tiene.
+	pend, _ := a.auth.PendingFromRequest(r)
+	key := strings.ToLower(strings.TrimSpace(pend.Email))
+	if sec, ok := a.store.Get().TOTP.Secrets[key]; !ok || !sec.Confirmed {
+		http.Redirect(w, r, "/auth/2fa/enroll", http.StatusFound)
 		return
 	}
 	page := totpPageHead + a.twofaError(r.URL.Query().Get("error")) + `

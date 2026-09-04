@@ -130,6 +130,14 @@ func (a *Authenticator) EnsureUnconfirmedSecret(key string) (config.TOTPSecret, 
 		sec = config.TOTPSecret{Secret: s, Confirmed: false}
 		c.TOTP.Secrets[key] = sec
 	})
+	// Si no se pudo generar un secreto (p.ej. fallo de crypto/rand), no debe
+	// quedar un secreto vacio que rompa aguas abajo (QR invalido).
+	if sec.Secret == "" && err == nil {
+		_, exists := a.store.Get().TOTP.Secrets[key]
+		if !exists {
+			err = errors.New("no se pudo generar el secreto TOTP")
+		}
+	}
 	return sec, err
 }
 

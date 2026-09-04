@@ -75,6 +75,47 @@ func TestVerifyTOTPCodeAcceptsCurrentCode(t *testing.T) {
 	}
 }
 
+// TestVerifyTOTPCodeSkewWindow comprueba que el codigo se acepta dentro de la
+// ventana de tolerancia de reloj (skew) definida por totpSkew, tanto pasada
+// como futura, y que se rechaza fuera de ella. El uso de verifyTOTPCodeAt hace
+// la prueba determinista.
+func TestVerifyTOTPCodeSkewWindow(t *testing.T) {
+	secret := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	at := time.Unix(1700000000, 0)
+	code, err := TOTPCode(secret, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verifyTOTPCodeAt(secret, code, at) {
+		t.Fatalf("deberia aceptar el codigo vigente en el instante dado")
+	}
+	for d := int64(1); d <= totpSkew; d++ {
+		past, _ := TOTPCode(secret, at.Add(-time.Duration(d)*totpStep))
+		future, _ := TOTPCode(secret, at.Add(time.Duration(d)*totpStep))
+		if !verifyTOTPCodeAt(secret, past, at) {
+			t.Errorf("deberia aceptar codigo %d pasos atras", d)
+		}
+		if !verifyTOTPCodeAt(secret, future, at) {
+			t.Errorf("deberia aceptar codigo %d pasos adelante", d)
+		}
+	}
+	// Fuera de la ventana de skew debe rechazarse (si el codigo no coincide por
+	// casualidad con alguna ventana).
+	out, _ := TOTPCode(secret, at.Add(-time.Duration(totpSkew+2)*totpStep))
+	if verifyTOTPCodeAt(secret, out, at) {
+		t.Errorf("acepto codigo fuera de la ventana de skew (2 pasos extra)")
+	}
+}
+
+func TestNormalizeSecretRejectsInvalidBase32(t *testing.T) {
+	if _, err := normalizeSecret("CORTONOVALIDO"); err == nil {
+		t.Errorf("normalizeSecret deberia rechazar un secreto que no es base32 valido")
+	}
+	if _, err := normalizeSecret("0-0-0-0-0-0-0-0-0-0-0"); err == nil {
+		t.Errorf("normalizeSecret deberia rechazar caracteres no base32")
+	}
+}
+
 func TestProvisionURI(t *testing.T) {
 	uri := ProvisionURI("PxProxy", "a@b.com", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
 	for _, part := range []string{"otpauth://totp/", "secret=GEZDG", "issuer=PxProxy", "digits=6", "period=30"} {

@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 -timeout 120s ./...
+
+      - name: Build all platforms
+        run: |
+          mkdir -p dist
+          GOOS=linux  GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${GITHUB_REF_NAME} -s -w" -o dist/pxproxy-linux-amd64 .
+          GOOS=linux  GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${GITHUB_REF_NAME} -s -w" -o dist/pxproxy-linux-arm64 .
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${GITHUB_REF_NAME} -s -w" -o dist/pxproxy-windows-amd64.exe .
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## pxproxy ${{ github.ref_name }}
+
+            Minimo 12 caracteres con mayusculas, minusculas, numeros y simbolos para la contrasena del panel.
+          files: dist/*

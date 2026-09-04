@@ -25,6 +25,7 @@
     <a href="#twofa" data-view="twofa"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>2FA (TOTP)</a>
     <a href="#certs" data-view="certs"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Certificados SSL</a>
     <a href="#stream" data-view="stream"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/><path d="M22 12h-3"/></svg>Stream TCP (TLS)</a>
+    <a href="#actualizacion" data-view="actualizacion"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>Actualizacion</a>
   </nav>
 </aside>
 
@@ -306,6 +307,20 @@
       <label id="stream-tls-wrap"><input type="checkbox" name="tls"> Terminar TLS entrante</label>
       <button class="btn primary" type="submit">Agregar</button>
     </form>
+  </section>
+
+  <section class="card view" data-view-name="actualizacion">
+    <h2>Actualizacion</h2>
+    <p class="muted small">Comprueba si hay una version mas reciente de PxProxy publicada en <b>GitHub</b> e instala el binario para tu plataforma. Al instalar, el servicio se descargara y reiniciara automaticamente, guardando una copia del binario anterior.</p>
+    <dl id="update-info" class="status">
+      <div><dt>Version instalada</dt><dd id="up-installed">-</dd></div>
+      <div><dt>Version disponible</dt><dd id="up-latest">-</dd></div>
+      <div><dt>Estado</dt><dd id="up-state" class="muted">Consultando...</dd></div>
+    </dl>
+    <div class="row mt-8">
+      <button class="btn small" type="button" id="btn-update-check">Buscar actualizaciones</button>
+      <button class="btn primary small" type="button" id="btn-update-apply" disabled>Descargar e instalar</button>
+    </div>
   </section>
 </main>
 </div>
